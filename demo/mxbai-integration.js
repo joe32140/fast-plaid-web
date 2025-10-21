@@ -19,7 +19,7 @@ class MxbaiEdgeColbertIntegration {
             'lightonai/GTE-ModernColBERT-v1',
             'mixedbread-ai/mxbai-edge-colbert-v0-17m' // Try this after known working ones
         ];
-        
+
         // Required files for pylate-rs ColBERT models
         this.requiredFiles = [
             'tokenizer.json',
@@ -30,7 +30,7 @@ class MxbaiEdgeColbertIntegration {
             '1_Dense/config.json',
             'special_tokens_map.json',
         ];
-        
+
         // Alternative file structure for some models
         this.alternativeFiles = [
             'tokenizer.json',
@@ -48,7 +48,7 @@ class MxbaiEdgeColbertIntegration {
      */
     async initializeModel() {
         console.log('🚀 Loading real ColBERT model with pylate-rs...');
-        
+
         try {
             // Import pylate-rs WASM module
             console.log('📦 Importing pylate-rs WASM module...');
@@ -56,22 +56,22 @@ class MxbaiEdgeColbertIntegration {
             console.log('🔧 Initializing WASM...');
             await pylateModule.default(); // Initialize WASM
             ColBERT = pylateModule.ColBERT;
-            
+
             console.log('✅ pylate-rs WASM module loaded successfully');
             console.log('🔍 Available ColBERT class:', ColBERT);
-            
+
             // Load the actual model from Hugging Face
             await this.loadModelFromHuggingFace();
-            
+
             this.modelLoaded = true;
             this.simulationMode = false;
             console.log(`🎉 Real ColBERT model (${this.modelRepo}) loaded successfully!`);
             return true;
-            
+
         } catch (error) {
             console.error('❌ Failed to initialize real ColBERT model:', error);
             console.error('Error details:', error.stack);
-            
+
             // For demo purposes, let's try to continue with simulation
             // In production, you might want to show an error to the user
             console.log('🔄 Falling back to simulation mode for demo...');
@@ -96,7 +96,7 @@ class MxbaiEdgeColbertIntegration {
      */
     async loadModelFromHuggingFace() {
         const modelsToTry = [this.modelRepo, ...this.fallbackModels];
-        
+
         for (const modelRepo of modelsToTry) {
             try {
                 console.log(`📥 Trying to load ${modelRepo}...`);
@@ -120,7 +120,7 @@ class MxbaiEdgeColbertIntegration {
         const fetchAllFiles = async (basePath, fileList) => {
             console.log(`🔍 Fetching files from ${basePath}...`);
             console.log(`📋 File list:`, fileList);
-            
+
             const responses = await Promise.all(
                 fileList.map(async (file) => {
                     const url = `${basePath}/${file}`;
@@ -132,18 +132,16 @@ class MxbaiEdgeColbertIntegration {
                     return response;
                 })
             );
-            
+
             console.log(`✅ All files fetched successfully`);
             return Promise.all(
                 responses.map(res => res.arrayBuffer().then(b => new Uint8Array(b)))
             );
         };
 
-        let modelFiles;
-        
         // For browser demo, skip local and go directly to Hugging Face
         console.log('🌐 Downloading from Hugging Face Hub...');
-        
+
         let modelFiles;
         try {
             // Try primary file structure first
@@ -219,11 +217,11 @@ class MxbaiEdgeColbertIntegration {
                     sentences: [text],
                     is_query: isQuery
                 });
-                
+
                 console.log(`✅ Raw ${textType} result received`);
                 console.log(`🔍 Result type: ${typeof rawResult}`);
                 console.log(`🔍 Result structure:`, rawResult);
-                
+
                 // Handle ColBERT result format based on your working code
                 let embeddings;
                 if (Array.isArray(rawResult)) {
@@ -253,16 +251,16 @@ class MxbaiEdgeColbertIntegration {
 
                 console.log(`✅ Final ${textType} embeddings: array with ${embeddings.length} token vectors`);
                 console.log('🔍 First token vector length:', embeddings[0]?.length);
-                
+
                 // Flatten the token vectors into a single array for FastPlaid compatibility
                 const flatEmbeddings = embeddings.flat();
-                
+
                 // Calculate token count and dimensions
                 const numTokens = embeddings.length;
                 const tokenDim = embeddings[0]?.length || this.embeddingDim;
-                
+
                 console.log(`📊 Token count: ${numTokens}, Token dimension: ${tokenDim}`);
-                
+
                 return {
                     embeddings: new Float32Array(flatEmbeddings),
                     shape: [1, numTokens, tokenDim],
@@ -402,7 +400,7 @@ class MxbaiEdgeColbertIntegration {
 
         const realCount = documentEmbeddings.filter(doc => doc.isReal).length;
         const simCount = documentEmbeddings.length - realCount;
-        
+
         console.log(`✅ Document index created: ${realCount} real embeddings, ${simCount} simulated`);
         return documentEmbeddings;
     }
@@ -487,14 +485,14 @@ class MxbaiEdgeColbertIntegration {
      */
     async testPylateRs() {
         console.log('🧪 Testing pylate-rs basic functionality...');
-        
+
         if (!ColBERT) {
             throw new Error('ColBERT class not available');
         }
-        
+
         console.log('✅ ColBERT class is available');
         console.log('🔍 ColBERT constructor:', ColBERT.toString());
-        
+
         return true;
     }
 
@@ -503,16 +501,16 @@ class MxbaiEdgeColbertIntegration {
      */
     async tryMxbaiModel() {
         console.log('🚀 Trying specifically mxbai-edge-colbert-v0-17m...');
-        
+
         try {
             await this.testPylateRs();
-            
+
             // Check what files are actually available for mxbai model
             const modelRepo = 'mixedbread-ai/mxbai-edge-colbert-v0-17m';
             const basePath = `https://huggingface.co/${modelRepo}/resolve/main`;
-            
+
             console.log('🔍 Checking available files for mxbai model...');
-            
+
             // Check each required file individually
             const fileStatus = {};
             for (const file of this.requiredFiles) {
@@ -523,13 +521,13 @@ class MxbaiEdgeColbertIntegration {
                     fileStatus[file] = `❌ ${e.message}`;
                 }
             }
-            
+
             console.log('📋 mxbai file availability:', fileStatus);
-            
+
             // Count available files
             const availableFiles = Object.entries(fileStatus).filter(([_, status]) => status === '✅');
             console.log(`📊 Available files: ${availableFiles.length}/${this.requiredFiles.length}`);
-            
+
             if (availableFiles.length < this.requiredFiles.length) {
                 console.warn('⚠️ mxbai model missing required files, using working model instead');
                 // Use the working model from test
@@ -540,7 +538,7 @@ class MxbaiEdgeColbertIntegration {
                 await this.loadSingleModel(modelRepo);
                 this.modelRepo = modelRepo;
             }
-            
+
             this.simulationMode = false;
             console.log(`🎉 Model loaded successfully: ${this.modelRepo}`);
             return true;
@@ -555,7 +553,7 @@ class MxbaiEdgeColbertIntegration {
      */
     async forceRealModel() {
         console.log('🔄 Force retrying real model loading...');
-        
+
         // First test if pylate-rs is working
         try {
             await this.testPylateRs();
@@ -563,10 +561,10 @@ class MxbaiEdgeColbertIntegration {
             console.error('❌ pylate-rs test failed:', error);
             return false;
         }
-        
+
         this.simulationMode = false;
         this.model = null;
-        
+
         try {
             await this.loadModelFromHuggingFace();
             console.log('✅ Force retry successful!');

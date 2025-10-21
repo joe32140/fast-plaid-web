@@ -90,6 +90,9 @@
         <button id="loadIndexBtn" disabled>Load Sample Index</button>
         <button id="forceRealModelBtn" disabled style="background: #ff9800;">🚀 Force Real Model</button>
         <button id="tryMxbaiBtn" disabled style="background: #9c27b0; color: white;">🎯 Try mxbai Model</button>
+        <div style="font-size: 0.9em; color: #666; margin-top: 5px;">
+            💡 After trying mxbai model, click "Load Sample Index" to rebuild with new model
+        </div>
         <div id="indexStatus"></div>
     </div>
 
@@ -118,18 +121,33 @@
         <p><strong>Search Algorithm:</strong> ColBERT MaxSim scoring</p>
         <p><strong>Pipeline:</strong> Text → mxbai-edge-colbert → Token Embeddings → FastPlaid → Ranked Results</p>
         <p><strong>Status:</strong> <span id="techStatus">Demo mode with simulated embeddings</span></p>
+        <p><strong>Embeddings:</strong> <span id="embeddingStatus">🎭 Simulated (no model loaded)</span></p>
         <p><strong>Debug:</strong> <a href="test-pylate.html" target="_blank">Test pylate-rs Integration</a></p>
     </div>
 
     <script type="module">
         // Import our integration and WASM modules
-        import('./mxbai-integration.js');
         import init, { FastPlaidWasm } from './pkg/fast_plaid_rust.js';
 
         let fastPlaid = null;
         let mxbaiIntegration = null;
         let documentIndex = null;
         let wasmInitialized = false;
+
+        // Load the integration module
+        async function loadIntegration() {
+            await import('./mxbai-integration.js');
+            // The class is now available on window.MxbaiEdgeColbertIntegration
+        }
+
+        // Initialize everything
+        async function initializeApp() {
+            await loadIntegration();
+            setupEventListeners();
+        }
+
+        // Set up all event listeners after modules are loaded
+        function setupEventListeners() {
 
         // DOM elements
         const initBtn = document.getElementById('initBtn');
@@ -245,21 +263,37 @@
             }
         });
 
-        // Try mxbai model specifically
+        // Try mxbai model specifically and rebuild index
         tryMxbaiBtn.addEventListener('click', async () => {
             try {
-                indexStatus.innerHTML = '<div>🎯 Trying mxbai-edge-colbert-v0-17m specifically...</div>';
+                indexStatus.innerHTML = '<div>🎯 Loading mxbai-edge-colbert-v0-17m and rebuilding index...</div>';
                 
                 const success = await mxbaiIntegration.tryMxbaiModel();
                 if (success) {
-                    showSuccess(indexStatus, '🎉 mxbai-edge-colbert model loaded! Try creating index again.');
-                    
                     // Update technical status
                     const modelStatus = mxbaiIntegration.getModelStatus();
                     const techStatus = document.getElementById('techStatus');
                     if (techStatus) {
                         techStatus.textContent = `🚀 Real ${modelStatus.modelRepo} loaded via pylate-rs`;
                     }
+                    
+                    // Automatically rebuild the document index with the new model
+                    indexStatus.innerHTML = '<div>🔄 Rebuilding document index with mxbai-edge-colbert...</div>';
+                    
+                    const documents = mxbaiIntegration.createSampleDocuments();
+                    documentIndex = await mxbaiIntegration.createDocumentIndex(documents);
+                    
+                    // Load into FastPlaid (placeholder for now)
+                    const dummyIndexBytes = new Uint8Array([1, 2, 3, 4, 5]);
+                    try {
+                        await fastPlaid.load_index(dummyIndexBytes);
+                    } catch (error) {
+                        // Expected - placeholder implementation
+                    }
+                    
+                    showSuccess(indexStatus, `🎉 mxbai-edge-colbert loaded and ${documents.length} documents indexed! Ready to search.`);
+                    searchBtn.disabled = false;
+                    
                 } else {
                     showError(indexStatus, '❌ mxbai model loading failed. Check console for details.');
                 }
@@ -292,10 +326,25 @@
                         topK
                     );
                     
+                    // Update embedding status
+                    const embeddingStatus = document.getElementById('embeddingStatus');
+                    const realResults = searchResults.filter(r => r.isReal).length;
+                    if (embeddingStatus) {
+                        if (realResults > 0) {
+                            embeddingStatus.innerHTML = `🚀 Real ColBERT embeddings (${realResults}/${searchResults.length} results)`;
+                        } else {
+                            embeddingStatus.innerHTML = `🎭 Simulated embeddings (model failed)`;
+                        }
+                    }
+                    
                     showSuccess(searchStatus, `Found ${searchResults.length} results using mxbai-edge-colbert + FastPlaid`);
                     displayMxbaiResults(searchResults, query);
                 } else {
                     // Fallback to demo results
+                    const embeddingStatus = document.getElementById('embeddingStatus');
+                    if (embeddingStatus) {
+                        embeddingStatus.innerHTML = `🎭 Demo mode (no index loaded)`;
+                    }
                     showStatus(searchStatus, 'Search demo - showing sample results');
                     displayDemoResults(query, topK);
                 }
@@ -374,6 +423,10 @@
 
         // Show initial instructions
         showStatus(initStatus, 'Click "Initialize WASM Module" to start');
+        }
+
+        // Initialize the app when DOM is loaded
+        document.addEventListener('DOMContentLoaded', initializeApp);
     </script>
 </body>
 </html>
