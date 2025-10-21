@@ -118,8 +118,9 @@
         <p><strong>Status:</strong> <span id="techStatus">Demo mode with simulated embeddings</span></p>
     </div>
 
-    <script src="mxbai-integration.js"></script>
     <script type="module">
+        // Import our integration and WASM modules
+        import('./mxbai-integration.js');
         import init, { FastPlaidWasm } from './pkg/fast_plaid_rust.js';
 
         let fastPlaid = null;
@@ -165,6 +166,16 @@
                 await mxbaiIntegration.initializeModel();
                 
                 wasmInitialized = true;
+                
+                // Update technical status
+                const modelStatus = mxbaiIntegration.getModelStatus();
+                const techStatus = document.getElementById('techStatus');
+                if (techStatus) {
+                    const statusText = modelStatus.hasRealModel ? 
+                        'Real pylate-rs model loaded from Hugging Face' : 
+                        'Simulation mode (real model loading failed)';
+                    techStatus.textContent = statusText;
+                }
                 
                 showSuccess(initStatus, 'WASM module and mxbai-edge-colbert initialized successfully!');
                 loadIndexBtn.disabled = false;
@@ -261,13 +272,15 @@
             let html = '<div class="results">';
             html += `<div><strong>mxbai-edge-colbert Results for:</strong> "${query}"</div><br>`;
             searchResults.forEach((result, index) => {
+                const statusIcon = result.isReal ? '🚀' : '🎭';
+                const statusText = result.isReal ? 'Real pylate-rs embeddings' : 'Simulated embeddings';
                 html += `
                     <div class="result-item">
                         <div><strong>${result.title}</strong></div>
                         <div>Document ID: ${result.id}</div>
                         <div class="score">ColBERT MaxSim Score: ${result.score.toFixed(4)}</div>
                         <div style="font-size: 0.9em; color: #666; margin-top: 5px;">
-                            ✅ Encoded with mxbai-edge-colbert-v0-17m
+                            ${statusIcon} ${statusText}
                         </div>
                     </div>
                 `;

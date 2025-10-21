@@ -24,16 +24,21 @@ Text Query → mxbai-edge-colbert → Token Embeddings → FastPlaid WASM → Ra
 
 ## Running the Demo
 
-1. **Serve the files**: Use any HTTP server (Python, Node.js, etc.)
+1. **Install dependencies**:
    ```bash
-   # Python
-   python3 -m http.server 8000
-   
-   # Node.js
-   npx serve .
+   npm install
    ```
 
-2. **Open in browser**: Navigate to `http://localhost:8000`
+2. **Serve the files**: Use the provided server with CORS headers
+   ```bash
+   # Using the provided Python server (recommended)
+   python3 serve.py
+   
+   # Or use any HTTP server with CORS support
+   python3 -m http.server 8000
+   ```
+
+3. **Open in browser**: Navigate to `http://localhost:8000`
 
 3. **Follow the steps**:
    - Initialize WASM Module (loads FastPlaid + mxbai-edge-colbert)
@@ -65,17 +70,19 @@ The demo includes 8 sample documents about machine learning topics:
 
 ### ✅ Completed
 - WASM compilation and basic API
-- mxbai-edge-colbert integration layer
-- ColBERT MaxSim scoring simulation
+- **Real mxbai-edge-colbert integration with pylate-rs**
+- **Automatic model loading from Hugging Face Hub**
+- ColBERT MaxSim scoring with real embeddings
 - End-to-end search pipeline
 - Browser demo with UI
+- Fallback to simulation mode if model loading fails
 
 ### 🔄 Next Steps (for production)
-- Replace simulated embeddings with real Transformers.js integration
 - Implement full FastPlaid tensor operations with Candle
 - Add proper index serialization/deserialization
-- Optimize WASM bundle size
+- Optimize WASM bundle size and model caching
 - Add support for larger document collections
+- Implement incremental index updates
 
 ## Files
 
