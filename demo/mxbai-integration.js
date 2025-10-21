@@ -183,19 +183,38 @@ class MxbaiEdgeColbertIntegration {
         if (this.model && !this.simulationMode) {
             // Use real pylate-rs model
             try {
-                // pylate-rs expects an object with sentences array and is_query boolean
-                const embeddings = await this.model.encode({
-                    sentences: [text],
-                    is_query: isQuery
-                });
+                // pylate-rs WASM encode method: encode(sentences_array, is_query_boolean)
+                const rawEmbeddings = await this.model.encode([text], isQuery);
                 
-                console.log(`✅ Real ${textType} embeddings generated: ${embeddings.length} values`);
+                console.log(`✅ Raw ${textType} embeddings received`);
+                console.log(`🔍 Embeddings type: ${typeof rawEmbeddings}`);
+                console.log(`🔍 Embeddings structure:`, rawEmbeddings);
+                
+                // Handle different possible return formats from pylate-rs
+                let embeddingArray;
+                if (Array.isArray(rawEmbeddings)) {
+                    embeddingArray = rawEmbeddings;
+                } else if (rawEmbeddings.length !== undefined) {
+                    // Might be a typed array or array-like object
+                    embeddingArray = Array.from(rawEmbeddings);
+                } else if (rawEmbeddings[0] && Array.isArray(rawEmbeddings[0])) {
+                    // Might be nested array [[embeddings]]
+                    embeddingArray = rawEmbeddings[0];
+                } else if (rawEmbeddings.data && Array.isArray(rawEmbeddings.data)) {
+                    // Might have a .data property
+                    embeddingArray = rawEmbeddings.data;
+                } else {
+                    console.warn(`⚠️ Unknown embeddings format, attempting conversion...`);
+                    embeddingArray = Object.values(rawEmbeddings);
+                }
+                
+                console.log(`✅ Processed ${textType} embeddings: ${embeddingArray.length} values`);
                 
                 // Calculate approximate token count (embeddings.length / embedding_dim)
-                const numTokens = Math.floor(embeddings.length / this.embeddingDim);
+                const numTokens = Math.floor(embeddingArray.length / this.embeddingDim);
                 
                 return {
-                    embeddings: new Float32Array(embeddings),
+                    embeddings: new Float32Array(embeddingArray),
                     shape: [1, numTokens, this.embeddingDim],
                     numTokens: numTokens,
                     isReal: true

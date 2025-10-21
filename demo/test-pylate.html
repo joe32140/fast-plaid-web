@@ -131,12 +131,29 @@
                 const testQuery = "What is machine learning?";
                 log(`📝 Encoding query: "${testQuery}"`);
                 
-                const embeddings = await model.encode({
-                    sentences: [testQuery],
-                    is_query: true
-                });
-                log(`✅ Query encoding successful! Generated ${embeddings.length} values`);
-                log(`📊 First 10 values: [${embeddings.slice(0, 10).map(x => x.toFixed(4)).join(', ')}...]`);
+                const embeddings = await model.encode([testQuery], true);
+                
+                log(`✅ Query encoding successful!`);
+                log(`🔍 Embeddings type: ${typeof embeddings}`);
+                log(`🔍 Embeddings structure:`, embeddings);
+                
+                // Handle different possible return formats
+                let embeddingArray;
+                if (Array.isArray(embeddings)) {
+                    embeddingArray = embeddings;
+                } else if (embeddings.length !== undefined) {
+                    embeddingArray = Array.from(embeddings);
+                } else if (embeddings[0] && Array.isArray(embeddings[0])) {
+                    embeddingArray = embeddings[0];
+                } else {
+                    log(`⚠️ Unknown embeddings format, trying to convert...`);
+                    embeddingArray = Object.values(embeddings);
+                }
+                
+                log(`📊 Generated ${embeddingArray.length} values`);
+                if (embeddingArray.length > 0) {
+                    log(`📊 First 10 values: [${embeddingArray.slice(0, 10).map(x => x.toFixed(4)).join(', ')}...]`);
+                }
                 
                 log('🎉 Query encoding test successful!', 'success');
                 
@@ -158,12 +175,29 @@
                 const testDoc = "Machine learning is a subset of artificial intelligence that enables computers to learn from data.";
                 log(`📝 Encoding document: "${testDoc.substring(0, 50)}..."`);
                 
-                const embeddings = await model.encode({
-                    sentences: [testDoc],
-                    is_query: false
-                });
-                log(`✅ Document encoding successful! Generated ${embeddings.length} values`);
-                log(`📊 First 10 values: [${embeddings.slice(0, 10).map(x => x.toFixed(4)).join(', ')}...]`);
+                const embeddings = await model.encode([testDoc], false);
+                
+                log(`✅ Document encoding successful!`);
+                log(`🔍 Embeddings type: ${typeof embeddings}`);
+                log(`🔍 Embeddings structure:`, embeddings);
+                
+                // Handle different possible return formats
+                let embeddingArray;
+                if (Array.isArray(embeddings)) {
+                    embeddingArray = embeddings;
+                } else if (embeddings.length !== undefined) {
+                    embeddingArray = Array.from(embeddings);
+                } else if (embeddings[0] && Array.isArray(embeddings[0])) {
+                    embeddingArray = embeddings[0];
+                } else {
+                    log(`⚠️ Unknown embeddings format, trying to convert...`);
+                    embeddingArray = Object.values(embeddings);
+                }
+                
+                log(`📊 Generated ${embeddingArray.length} values`);
+                if (embeddingArray.length > 0) {
+                    log(`📊 First 10 values: [${embeddingArray.slice(0, 10).map(x => x.toFixed(4)).join(', ')}...]`);
+                }
                 
                 log('🎉 Document encoding test successful!', 'success');
                 
