@@ -363,7 +363,7 @@ pub fn search(
     device: Device,
     subset: Option<&Tensor>,
 ) -> anyhow::Result<(Vec<i64>, Vec<f32>)> {
-    let (pids, scores) = {
+    let result = {
         let query_embeddings_unsqueezed = query_embeddings.unsqueeze(0)?;
 
         let query_centroid_scores = codec.centroids.matmul(&query_embeddings.t()?)?;
@@ -383,10 +383,10 @@ pub fn search(
         let unique_ivf_cells_to_probe = flat_selected_ivf_cells; // Simplified for now
 
         let (retrieved_passage_ids_ivf, _) =
-            ivf_index_strided.lookup(&unique_ivf_cells_to_probe, device)?;
-        let sorted_passage_ids_ivf = retrieved_passage_ids_ivf.sort_last_dim(false)?;
+            ivf_index_strided.lookup(&unique_ivf_cells_to_probe, device.clone())?;
+        let (sorted_passage_ids_ivf, _) = retrieved_passage_ids_ivf.sort_last_dim(false)?;
         // Note: Using sorted result directly since Candle doesn't have unique_consecutive
-        let mut unique_passage_ids_after_ivf = sorted_passage_ids_ivf;
+        let mut unique_passage_ids_after_ivf: Tensor = sorted_passage_ids_ivf;
 
         if let Some(subset_tensor) = subset {
             unique_passage_ids_after_ivf =
@@ -414,7 +414,7 @@ pub fn search(
                 (batch_end - batch_start) as usize
             )?;
             let (batch_packed_codes, batch_doc_lengths) =
-                doc_codes_strided.lookup(&batch_pids, device)?;
+                doc_codes_strided.lookup(&batch_pids, device.clone())?;
 
             if batch_packed_codes.elem_count() == 0 {
                 approx_score_chunks.push(Tensor::zeros(
@@ -430,14 +430,14 @@ pub fn search(
                 0
             )?;
             let (padded_approx_scores, mask) =
-                direct_pad_sequences(&batch_approx_scores, &batch_doc_lengths, 0.0, device)?;
+                direct_pad_sequences(&batch_approx_scores, &batch_doc_lengths, 0.0, device.clone())?;
             approx_score_chunks.push(colbert_score_reduce(&padded_approx_scores, &mask)?);
         }
 
         let approx_scores = if !approx_score_chunks.is_empty() {
             Tensor::cat(&approx_score_chunks, 0)?
         } else {
-            Tensor::zeros((0,), DType::F32, &device)?
+            Tensor::zeros((0,), DType::F32, &device.clone())?
         };
 
         if approx_scores.dims()[0] != unique_passage_ids_after_ivf.dims()[0] {
@@ -474,8 +474,8 @@ pub fn search(
         }
 
         let (final_codes, final_doc_lengths) =
-            doc_codes_strided.lookup(&passage_ids_to_rerank, device)?;
-        let (final_residuals, _) = doc_residuals_strided.lookup(&passage_ids_to_rerank, device)?;
+            doc_codes_strided.lookup(&passage_ids_to_rerank, device.clone())?;
+        let (final_residuals, _) = doc_residuals_strided.lookup(&passage_ids_to_rerank, device.clone())?;
 
         let bucket_weights = codec
             .bucket_weights
@@ -498,7 +498,7 @@ pub fn search(
         )?;
 
         let (padded_doc_embs, mask) =
-            direct_pad_sequences(&decompressed_embs, &final_doc_lengths, 0.0, device)?;
+            direct_pad_sequences(&decompressed_embs, &final_doc_lengths, 0.0, device.clone())?;
         let final_scores = padded_doc_embs.matmul(&query_embeddings_unsqueezed.t()?)?;
         let reduced_scores = colbert_score_reduce(&final_scores, &mask)?;
 
@@ -517,5 +517,5 @@ pub fn search(
         ))
     };
 
-    Ok((pids, scores))
+    result
 }

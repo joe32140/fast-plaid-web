@@ -11,20 +11,31 @@ path = "rust/lib.rs"
 
 [dependencies]
 anyhow = "1.0.98"
-candle-core = "0.9.1"
 itertools = "0.14.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
+
+# Conditional dependencies based on target
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = "0.9.1"
 parking_lot = "0.12.3"
 once_cell = "1.21.3"
 indicatif = "0.17.11"
 regex = "1.11.1"
-rand = "0.9.1"  # Needed by other modules, Candle 0.9.1 is compatible
+rand = "0.9.1"
 
-# WASM support (will be enabled later)
-# wasm-bindgen = { version = "0.2", optional = true }
-# js-sys = { version = "0.3", optional = true }
-# web-sys = { version = "0.3", optional = true }
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Minimal dependencies for WASM - avoid Candle for now due to getrandom conflicts
+wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+  "console",
+  "Performance",
+  "Window",
+] }
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
 
 # Remove PyTorch dependencies:
 # tch = { version = "0.20.0" }
