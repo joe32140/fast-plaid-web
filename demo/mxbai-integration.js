@@ -183,59 +183,60 @@ class MxbaiEdgeColbertIntegration {
         if (this.model && !this.simulationMode) {
             // Use real pylate-rs model
             try {
-                // Try different API formats for pylate-rs WASM
-                let rawEmbeddings;
-                try {
-                    // Format 1: {sentences: [...]}, is_query
-                    rawEmbeddings = await this.model.encode({
-                        sentences: [text]
-                    }, isQuery);
-                } catch (e1) {
-                    console.log(`Format 1 failed: ${e1.message}, trying format 2...`);
-                    try {
-                        // Format 2: [sentences], is_query
-                        rawEmbeddings = await this.model.encode([text], isQuery);
-                    } catch (e2) {
-                        console.log(`Format 2 failed: ${e2.message}, trying format 3...`);
-                        // Format 3: {sentences: [...], is_query: boolean}
-                        rawEmbeddings = await this.model.encode({
-                            sentences: [text],
-                            is_query: isQuery
-                        });
-                    }
-                }
+                // Use the correct pylate-rs API based on your working code
+                const rawResult = await this.model.encode({
+                    sentences: [text],
+                    is_query: isQuery
+                });
                 
-                console.log(`✅ Raw ${textType} embeddings received`);
-                console.log(`🔍 Embeddings type: ${typeof rawEmbeddings}`);
-                console.log(`🔍 Embeddings structure:`, rawEmbeddings);
+                console.log(`✅ Raw ${textType} result received`);
+                console.log(`🔍 Result type: ${typeof rawResult}`);
+                console.log(`🔍 Result structure:`, rawResult);
                 
-                // Handle different possible return formats from pylate-rs
-                let embeddingArray;
-                if (Array.isArray(rawEmbeddings)) {
-                    embeddingArray = rawEmbeddings;
-                } else if (rawEmbeddings.length !== undefined) {
-                    // Might be a typed array or array-like object
-                    embeddingArray = Array.from(rawEmbeddings);
-                } else if (rawEmbeddings[0] && Array.isArray(rawEmbeddings[0])) {
-                    // Might be nested array [[embeddings]]
-                    embeddingArray = rawEmbeddings[0];
-                } else if (rawEmbeddings.data && Array.isArray(rawEmbeddings.data)) {
-                    // Might have a .data property
-                    embeddingArray = rawEmbeddings.data;
+                // Handle ColBERT result format based on your working code
+                let embeddings;
+                if (Array.isArray(rawResult)) {
+                    console.log('✅ Using direct array result');
+                    embeddings = rawResult;
+                } else if (rawResult && rawResult.embeddings && Array.isArray(rawResult.embeddings)) {
+                    console.log('✅ Using result.embeddings array, length:', rawResult.embeddings.length);
+                    // Unwrap the first sentence's embedding (we passed one sentence)
+                    embeddings = rawResult.embeddings[0];
+                    console.log('🔍 Unwrapped embeddings length:', embeddings?.length);
+                } else if (rawResult && rawResult.data && Array.isArray(rawResult.data)) {
+                    console.log('✅ Using result.data array');
+                    embeddings = rawResult.data[0]; // Unwrap first sentence
+                } else if (rawResult && Array.isArray(rawResult[0])) {
+                    console.log('✅ Using result[0] array');
+                    embeddings = rawResult[0];
                 } else {
-                    console.warn(`⚠️ Unknown embeddings format, attempting conversion...`);
-                    embeddingArray = Object.values(rawEmbeddings);
+                    console.error('❌ Unknown result format:', rawResult);
+                    throw new Error('Unknown ColBERT result format');
                 }
+
+                // Validate the embeddings structure
+                if (!Array.isArray(embeddings) || embeddings.length === 0) {
+                    console.error('❌ Invalid embeddings structure:', embeddings);
+                    throw new Error('ColBERT returned empty or invalid embeddings');
+                }
+
+                console.log(`✅ Final ${textType} embeddings: array with ${embeddings.length} token vectors`);
+                console.log('🔍 First token vector length:', embeddings[0]?.length);
                 
-                console.log(`✅ Processed ${textType} embeddings: ${embeddingArray.length} values`);
+                // Flatten the token vectors into a single array for FastPlaid compatibility
+                const flatEmbeddings = embeddings.flat();
                 
-                // Calculate approximate token count (embeddings.length / embedding_dim)
-                const numTokens = Math.floor(embeddingArray.length / this.embeddingDim);
+                // Calculate token count and dimensions
+                const numTokens = embeddings.length;
+                const tokenDim = embeddings[0]?.length || this.embeddingDim;
+                
+                console.log(`📊 Token count: ${numTokens}, Token dimension: ${tokenDim}`);
                 
                 return {
-                    embeddings: new Float32Array(embeddingArray),
-                    shape: [1, numTokens, this.embeddingDim],
+                    embeddings: new Float32Array(flatEmbeddings),
+                    shape: [1, numTokens, tokenDim],
                     numTokens: numTokens,
+                    tokenDim: tokenDim,
                     isReal: true
                 };
             } catch (error) {

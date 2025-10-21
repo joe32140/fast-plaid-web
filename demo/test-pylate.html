@@ -131,53 +131,57 @@
                 const testQuery = "What is machine learning?";
                 log(`📝 Encoding query: "${testQuery}"`);
                 
-                // Try different API formats to find the working one
+                // Use the correct API format based on working reference code
+                const result = await model.encode({
+                    sentences: [testQuery],
+                    is_query: true
+                });
+                
+                log('🔍 Raw result:', result);
+                
+                // Handle ColBERT result format (based on working code)
                 let embeddings;
-                try {
-                    log('🧪 Trying format 1: {sentences: [...]}');
-                    embeddings = await model.encode({
-                        sentences: [testQuery]
-                    }, true);
-                } catch (e1) {
-                    log(`❌ Format 1 failed: ${e1.message}`);
-                    try {
-                        log('🧪 Trying format 2: [sentences], is_query');
-                        embeddings = await model.encode([testQuery], true);
-                    } catch (e2) {
-                        log(`❌ Format 2 failed: ${e2.message}`);
-                        try {
-                            log('🧪 Trying format 3: {sentences: [...], is_query: true}');
-                            embeddings = await model.encode({
-                                sentences: [testQuery],
-                                is_query: true
-                            });
-                        } catch (e3) {
-                            log(`❌ Format 3 failed: ${e3.message}`);
-                            throw new Error(`All formats failed. Last error: ${e3.message}`);
-                        }
-                    }
+                if (Array.isArray(result)) {
+                    embeddings = result;
+                } else if (result && result.embeddings && Array.isArray(result.embeddings)) {
+                    embeddings = result.embeddings[0]; // Unwrap first sentence
+                } else if (result && result.data && Array.isArray(result.data)) {
+                    embeddings = result.data[0];
+                } else if (result && Array.isArray(result[0])) {
+                    embeddings = result[0];
+                } else {
+                    throw new Error('Unknown ColBERT result format');
                 }
                 
                 log(`✅ Query encoding successful!`);
                 log(`🔍 Embeddings type: ${typeof embeddings}`);
                 log(`🔍 Embeddings structure:`, embeddings);
+                log(`🔍 Embeddings keys: ${Object.keys(embeddings)}`);
+                log(`🔍 Embeddings length property: ${embeddings.length}`);
+                if (embeddings.data) log(`🔍 Embeddings.data:`, embeddings.data);
+                if (embeddings[0]) log(`🔍 Embeddings[0]:`, embeddings[0]);
                 
-                // Handle different possible return formats
-                let embeddingArray;
-                if (Array.isArray(embeddings)) {
-                    embeddingArray = embeddings;
-                } else if (embeddings.length !== undefined) {
-                    embeddingArray = Array.from(embeddings);
-                } else if (embeddings[0] && Array.isArray(embeddings[0])) {
-                    embeddingArray = embeddings[0];
-                } else {
-                    log(`⚠️ Unknown embeddings format, trying to convert...`);
-                    embeddingArray = Object.values(embeddings);
+                // Validate embeddings structure
+                if (!Array.isArray(embeddings) || embeddings.length === 0) {
+                    throw new Error('ColBERT returned empty or invalid embeddings');
                 }
                 
-                log(`📊 Generated ${embeddingArray.length} values`);
-                if (embeddingArray.length > 0) {
-                    log(`📊 First 10 values: [${embeddingArray.slice(0, 10).map(x => x.toFixed(4)).join(', ')}...]`);
+                log(`📊 Generated ${embeddings.length} token vectors`);
+                log(`🔍 First token vector length: ${embeddings[0]?.length}`);
+                
+                // Show sample values from first token vector
+                if (embeddings[0] && Array.isArray(embeddings[0]) && embeddings[0].length > 0) {
+                    const firstTokenVec = embeddings[0];
+                    const sampleValues = firstTokenVec.slice(0, 5).map(x => {
+                        if (typeof x === 'number') {
+                            return x.toFixed(4);
+                        } else {
+                            return String(x);
+                        }
+                    });
+                    log(`📊 First token vector sample: [${sampleValues.join(', ')}...]`);
+                } else {
+                    log(`⚠️ Unexpected token vector structure`);
                 }
                 
                 log('🎉 Query encoding test successful!', 'success');
@@ -200,53 +204,53 @@
                 const testDoc = "Machine learning is a subset of artificial intelligence that enables computers to learn from data.";
                 log(`📝 Encoding document: "${testDoc.substring(0, 50)}..."`);
                 
-                // Try different API formats to find the working one
+                // Use the correct API format based on working reference code
+                const result = await model.encode({
+                    sentences: [testDoc],
+                    is_query: false
+                });
+                
+                log('🔍 Raw result:', result);
+                
+                // Handle ColBERT result format (based on working code)
                 let embeddings;
-                try {
-                    log('🧪 Trying format 1: {sentences: [...]}');
-                    embeddings = await model.encode({
-                        sentences: [testDoc]
-                    }, false);
-                } catch (e1) {
-                    log(`❌ Format 1 failed: ${e1.message}`);
-                    try {
-                        log('🧪 Trying format 2: [sentences], is_query');
-                        embeddings = await model.encode([testDoc], false);
-                    } catch (e2) {
-                        log(`❌ Format 2 failed: ${e2.message}`);
-                        try {
-                            log('🧪 Trying format 3: {sentences: [...], is_query: false}');
-                            embeddings = await model.encode({
-                                sentences: [testDoc],
-                                is_query: false
-                            });
-                        } catch (e3) {
-                            log(`❌ Format 3 failed: ${e3.message}`);
-                            throw new Error(`All formats failed. Last error: ${e3.message}`);
-                        }
-                    }
+                if (Array.isArray(result)) {
+                    embeddings = result;
+                } else if (result && result.embeddings && Array.isArray(result.embeddings)) {
+                    embeddings = result.embeddings[0]; // Unwrap first sentence
+                } else if (result && result.data && Array.isArray(result.data)) {
+                    embeddings = result.data[0];
+                } else if (result && Array.isArray(result[0])) {
+                    embeddings = result[0];
+                } else {
+                    throw new Error('Unknown ColBERT result format');
                 }
                 
                 log(`✅ Document encoding successful!`);
                 log(`🔍 Embeddings type: ${typeof embeddings}`);
                 log(`🔍 Embeddings structure:`, embeddings);
                 
-                // Handle different possible return formats
-                let embeddingArray;
-                if (Array.isArray(embeddings)) {
-                    embeddingArray = embeddings;
-                } else if (embeddings.length !== undefined) {
-                    embeddingArray = Array.from(embeddings);
-                } else if (embeddings[0] && Array.isArray(embeddings[0])) {
-                    embeddingArray = embeddings[0];
-                } else {
-                    log(`⚠️ Unknown embeddings format, trying to convert...`);
-                    embeddingArray = Object.values(embeddings);
+                // Validate embeddings structure
+                if (!Array.isArray(embeddings) || embeddings.length === 0) {
+                    throw new Error('ColBERT returned empty or invalid embeddings');
                 }
                 
-                log(`📊 Generated ${embeddingArray.length} values`);
-                if (embeddingArray.length > 0) {
-                    log(`📊 First 10 values: [${embeddingArray.slice(0, 10).map(x => x.toFixed(4)).join(', ')}...]`);
+                log(`📊 Generated ${embeddings.length} token vectors`);
+                log(`🔍 First token vector length: ${embeddings[0]?.length}`);
+                
+                // Show sample values from first token vector
+                if (embeddings[0] && Array.isArray(embeddings[0]) && embeddings[0].length > 0) {
+                    const firstTokenVec = embeddings[0];
+                    const sampleValues = firstTokenVec.slice(0, 5).map(x => {
+                        if (typeof x === 'number') {
+                            return x.toFixed(4);
+                        } else {
+                            return String(x);
+                        }
+                    });
+                    log(`📊 First token vector sample: [${sampleValues.join(', ')}...]`);
+                } else {
+                    log(`⚠️ Unexpected token vector structure`);
                 }
                 
                 log('🎉 Document encoding test successful!', 'success');
