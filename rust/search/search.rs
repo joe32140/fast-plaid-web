@@ -1,8 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use indicatif::{ProgressBar, ProgressIterator};
-use pyo3::prelude::*;
 use serde::Serialize;
-use tch::{Device, IndexOp, Kind, Tensor};
+use candle_core::{Device, DType, Tensor};
 
 use crate::search::load::LoadedIndex;
 use crate::search::padding::direct_pad_sequences;
@@ -55,88 +54,91 @@ pub fn decompress_residuals(
     centroids: &Tensor,
     emb_dim: i64,
     nbits: i64,
-) -> Tensor {
-    let num_embeddings = codes.size()[0];
+) -> Result<Tensor> {
+    let num_embeddings = codes.dims()[0] as i64;
 
     const BITS_PER_PACKED_UNIT: i64 = 8;
     let packed_dim = (emb_dim * nbits) / BITS_PER_PACKED_UNIT;
     let codes_per_packed_unit = BITS_PER_PACKED_UNIT / nbits;
 
-    let retrieved_centroids = centroids.index_select(0, codes);
-    let reshaped_centroids =
-        retrieved_centroids.view([num_embeddings, packed_dim, codes_per_packed_unit]);
+    let retrieved_centroids = centroids.index_select(codes, 0)?;
+    let reshaped_centroids = retrieved_centroids.reshape((
+        num_embeddings as usize,
+        packed_dim as usize,
+        codes_per_packed_unit as usize,
+    ))?;
 
-    let flat_packed_residuals_u8 = packed_residuals.flatten(0, -1);
-    let flat_packed_residuals_indices = flat_packed_residuals_u8.to_kind(Kind::Int64);
+    let flat_packed_residuals_u8 = packed_residuals.flatten_all()?;
+    let flat_packed_residuals_indices = flat_packed_residuals_u8.to_dtype(DType::I64)?;
 
-    let flat_reversed_bits = byte_reversed_bits_map.index_select(0, &flat_packed_residuals_indices);
-    let reshaped_reversed_bits = flat_reversed_bits.view([num_embeddings, packed_dim]);
+    let flat_reversed_bits = byte_reversed_bits_map.index_select(&flat_packed_residuals_indices, 0)?;
+    let reshaped_reversed_bits = flat_reversed_bits.reshape((
+        num_embeddings as usize,
+        packed_dim as usize,
+    ))?;
 
-    let flat_reversed_bits_for_lookup = reshaped_reversed_bits.flatten(0, -1);
+    let flat_reversed_bits_for_lookup = reshaped_reversed_bits.flatten_all()?;
 
     let flat_selected_bucket_indices =
-        bucket_weight_indices_lookup.index_select(0, &flat_reversed_bits_for_lookup);
-    let reshaped_selected_bucket_indices =
-        flat_selected_bucket_indices.view([num_embeddings, packed_dim, codes_per_packed_unit]);
+        bucket_weight_indices_lookup.index_select(&flat_reversed_bits_for_lookup, 0)?;
+    let reshaped_selected_bucket_indices = flat_selected_bucket_indices.reshape((
+        num_embeddings as usize,
+        packed_dim as usize,
+        codes_per_packed_unit as usize,
+    ))?;
 
-    let flat_bucket_indices_for_weights = reshaped_selected_bucket_indices.flatten(0, -1);
+    let flat_bucket_indices_for_weights = reshaped_selected_bucket_indices.flatten_all()?;
 
-    let flat_gathered_weights = bucket_weights.index_select(0, &flat_bucket_indices_for_weights);
-    let reshaped_gathered_weights =
-        flat_gathered_weights.view([num_embeddings, packed_dim, codes_per_packed_unit]);
+    let flat_gathered_weights = bucket_weights.index_select(&flat_bucket_indices_for_weights, 0)?;
+    let reshaped_gathered_weights = flat_gathered_weights.reshape((
+        num_embeddings as usize,
+        packed_dim as usize,
+        codes_per_packed_unit as usize,
+    ))?;
 
-    let output_contributions_sum = reshaped_gathered_weights + reshaped_centroids;
-    let decompressed_embeddings = output_contributions_sum.view([num_embeddings, emb_dim]);
+    let output_contributions_sum = (&reshaped_gathered_weights + &reshaped_centroids)?;
+    let decompressed_embeddings = output_contributions_sum.reshape((
+        num_embeddings as usize,
+        emb_dim as usize,
+    ))?;
 
-    let norms = decompressed_embeddings
-        .norm_scalaropt_dim(2.0, &[-1], true)
-        .clamp_min(1e-12);
-        
-    decompressed_embeddings / norms
+    // Compute L2 norms and normalize
+    let norms = decompressed_embeddings.sqr()?.sum_keepdim(1)?.sqrt()?.clamp(1e-12f64, f64::INFINITY)?;
+    let normalized = decompressed_embeddings.broadcast_div(&norms)?;
+    
+    Ok(normalized)
 }
 
 /// Represents the results of a single search query.
 ///
-/// This struct is designed to be exposed to Python via `PyO3` and is also
-/// serializable. It encapsulates the retrieved passage IDs and their
+/// This struct is serializable and encapsulates the retrieved passage IDs and their
 /// corresponding scores for a specific query.
-#[pyclass]
 #[derive(Serialize, Debug)]
 pub struct QueryResult {
     /// The unique identifier for the query that produced these results.
-    #[pyo3(get)]
     pub query_id: usize,
     /// A vector of document or passage identifiers, ranked by relevance.
-    #[pyo3(get)]
     pub passage_ids: Vec<i64>,
     /// A vector of relevance scores corresponding to each passage in `passage_ids`.
-    #[pyo3(get)]
     pub scores: Vec<f32>,
 }
 
-/// Search configuration parameters, exposed to Python.
-#[pyclass]
+/// Search configuration parameters.
 #[derive(Clone, Debug)]
 pub struct SearchParameters {
     /// Number of queries per batch.
-    #[pyo3(get, set)]
     pub batch_size: usize,
     /// Number of documents to re-rank with exact scores.
-    #[pyo3(get, set)]
     pub n_full_scores: usize,
     /// Number of final results to return per query.
-    #[pyo3(get, set)]
     pub top_k: usize,
     /// Number of IVF cells to probe during the initial search.
-    #[pyo3(get, set)]
     pub n_ivf_probe: usize,
 }
 
-#[pymethods]
 impl SearchParameters {
-    /// Creates a new `SearchParameters` instance from Python.
-    #[new]
-    fn new(batch_size: usize, n_full_scores: usize, top_k: usize, n_ivf_probe: usize) -> Self {
+    /// Creates a new `SearchParameters` instance.
+    pub fn new(batch_size: usize, n_full_scores: usize, top_k: usize, n_ivf_probe: usize) -> Self {
         Self {
             batch_size,
             n_full_scores,

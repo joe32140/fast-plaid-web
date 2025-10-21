@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use std::iter;
-use tch::{Device, Kind, Tensor};
+use candle_core::{Device, DType, Tensor};
 
 /// A codec for managing residual quantization of vectors.
 ///
@@ -41,7 +41,7 @@ impl ResidualCodec {
     /// * `avg_residual_tensor_initial` - The initial tensor for the average residual.
     /// * `bucket_cutoffs_tensor_initial` - An optional tensor for bucket cutoffs.
     /// * `bucket_weights_tensor_initial` - An optional tensor for bucket weights.
-    /// * `device` - The `tch::Device` to which all tensors will be moved.
+    /// * `device` - The `candle_core::Device` to which all tensors will be moved.
     ///
     /// # Returns
     ///
@@ -54,7 +54,7 @@ impl ResidualCodec {
         bucket_weights_tensor_initial: Option<Tensor>,
         device: Device,
     ) -> anyhow::Result<Self> {
-        let bit_helper_tensor = Tensor::arange_start(0, nbits_param, (Kind::Int8, device));
+        let bit_helper_tensor = Tensor::arange(0i64, nbits_param, &device)?;
         let mut reversed_bits_map_u8 = Vec::with_capacity(256);
         let nbits_mask = (1 << nbits_param) - 1;
 
@@ -78,18 +78,16 @@ impl ResidualCodec {
             reversed_bits_map_u8.push((reversed_bits & 0xFF) as u8);
         }
 
-        let byte_map_tensor = Tensor::from_slice(
-            &reversed_bits_map_u8
-                .iter()
-                .map(|&val| val as i64)
-                .collect::<Vec<_>>(),
-        )
-        .to_kind(Kind::Int64)
-        .to_device(device);
+        let byte_map_data: Vec<i64> = reversed_bits_map_u8
+            .iter()
+            .map(|&val| val as i64)
+            .collect();
+        let byte_map_tensor = Tensor::new(&byte_map_data[..], &device)?
+            .to_dtype(DType::I64)?;
 
         let keys_per_byte = 8 / nbits_param;
         let opt_decomp_lookup_table = if let Some(ref weights) = bucket_weights_tensor_initial {
-            let num_buckets = weights.size()[0] as usize;
+            let num_buckets = weights.dims()[0] as usize;
             let bucket_indices = (0..num_buckets as i64).collect::<Vec<_>>();
 
             let combinations = iter::repeat(bucket_indices)
@@ -98,16 +96,15 @@ impl ResidualCodec {
                 .flatten()
                 .collect::<Vec<_>>();
 
-            let lookup_shape = vec![
-                (num_buckets as i64).pow(keys_per_byte as u32),
-                keys_per_byte,
-            ];
+            let lookup_shape = (
+                (num_buckets as usize).pow(keys_per_byte as u32),
+                keys_per_byte as usize,
+            );
 
             Some(
-                Tensor::from_slice(&combinations)
-                    .reshape(&lookup_shape)
-                    .to_kind(Kind::Int64)
-                    .to_device(device),
+                Tensor::new(&combinations[..], &device)?
+                    .reshape(lookup_shape)?
+                    .to_dtype(DType::I64)?,
             )
         } else {
             None
@@ -116,15 +113,17 @@ impl ResidualCodec {
         Ok(Self {
             nbits: nbits_param,
             centroids: centroids_tensor_initial
-                .to_device(device)
-                .to_kind(Kind::Half),
+                .to_device(&device)?
+                .to_dtype(DType::F16)?,
             avg_residual: avg_residual_tensor_initial
-                .to_device(device)
-                .to_kind(Kind::Half),
+                .to_device(&device)?
+                .to_dtype(DType::F16)?,
             bucket_cutoffs: bucket_cutoffs_tensor_initial
-                .map(|t| t.to_device(device).to_kind(Kind::Half)),
+                .map(|t| t.to_device(&device).and_then(|t| t.to_dtype(DType::F16)))
+                .transpose()?,
             bucket_weights: bucket_weights_tensor_initial
-                .map(|t| t.to_device(device).to_kind(Kind::Half)),
+                .map(|t| t.to_device(&device).and_then(|t| t.to_dtype(DType::F16)))
+                .transpose()?,
             bit_helper: bit_helper_tensor,
             byte_reversed_bits_map: byte_map_tensor,
             decomp_indices_lookup: opt_decomp_lookup_table,
