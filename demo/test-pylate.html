@@ -16,7 +16,8 @@
     
     <button onclick="testPylateImport()">1. Test pylate-rs Import</button>
     <button onclick="testModelLoading()">2. Test Model Loading</button>
-    <button onclick="testEncoding()">3. Test Encoding</button>
+    <button onclick="testQueryEncoding()">3. Test Query Encoding</button>
+    <button onclick="testDocumentEncoding()">4. Test Document Encoding</button>
     
     <div id="logs"></div>
 
@@ -118,26 +119,56 @@
             }
         };
         
-        window.testEncoding = async function() {
+        window.testQueryEncoding = async function() {
             if (!model) {
                 log('❌ Model not loaded. Run model loading test first.', 'error');
                 return;
             }
             
             try {
-                log('🔤 Testing text encoding...');
+                log('🔤 Testing query encoding...');
                 
-                const testText = "Hello world, this is a test.";
-                log(`📝 Encoding: "${testText}"`);
+                const testQuery = "What is machine learning?";
+                log(`📝 Encoding query: "${testQuery}"`);
                 
-                const embeddings = await model.encode(testText);
-                log(`✅ Encoding successful! Generated ${embeddings.length} values`);
+                const embeddings = await model.encode({
+                    sentences: [testQuery],
+                    is_query: true
+                });
+                log(`✅ Query encoding successful! Generated ${embeddings.length} values`);
                 log(`📊 First 10 values: [${embeddings.slice(0, 10).map(x => x.toFixed(4)).join(', ')}...]`);
                 
-                log('🎉 Encoding test successful!', 'success');
+                log('🎉 Query encoding test successful!', 'success');
                 
             } catch (error) {
-                log(`❌ Encoding failed: ${error.message}`, 'error');
+                log(`❌ Query encoding failed: ${error.message}`, 'error');
+                console.error(error);
+            }
+        };
+
+        window.testDocumentEncoding = async function() {
+            if (!model) {
+                log('❌ Model not loaded. Run model loading test first.', 'error');
+                return;
+            }
+            
+            try {
+                log('📄 Testing document encoding...');
+                
+                const testDoc = "Machine learning is a subset of artificial intelligence that enables computers to learn from data.";
+                log(`📝 Encoding document: "${testDoc.substring(0, 50)}..."`);
+                
+                const embeddings = await model.encode({
+                    sentences: [testDoc],
+                    is_query: false
+                });
+                log(`✅ Document encoding successful! Generated ${embeddings.length} values`);
+                log(`📊 First 10 values: [${embeddings.slice(0, 10).map(x => x.toFixed(4)).join(', ')}...]`);
+                
+                log('🎉 Document encoding test successful!', 'success');
+                
+            } catch (error) {
+                log(`❌ Document encoding failed: ${error.message}`, 'error');
                 console.error(error);
             }
         };

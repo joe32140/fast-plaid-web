@@ -169,20 +169,27 @@ class MxbaiEdgeColbertIntegration {
     /**
      * Encode text into ColBERT embeddings using real model or simulation
      * @param {string} text - Input text to encode
+     * @param {boolean} isQuery - Whether this is a query (true) or document (false)
      * @returns {Promise<Object>} - Token-level embeddings with metadata
      */
-    async encodeText(text) {
+    async encodeText(text, isQuery = true) {
         if (!this.modelLoaded) {
             throw new Error('Model not loaded. Call initializeModel() first.');
         }
 
-        console.log(`🔤 Encoding text: "${text.substring(0, 50)}..."`);
+        const textType = isQuery ? 'query' : 'document';
+        console.log(`🔤 Encoding ${textType}: "${text.substring(0, 50)}..."`);
 
         if (this.model && !this.simulationMode) {
             // Use real pylate-rs model
             try {
-                const embeddings = await this.model.encode(text);
-                console.log(`✅ Real embeddings generated: ${embeddings.length} values`);
+                // pylate-rs expects an object with sentences array and is_query boolean
+                const embeddings = await this.model.encode({
+                    sentences: [text],
+                    is_query: isQuery
+                });
+                
+                console.log(`✅ Real ${textType} embeddings generated: ${embeddings.length} values`);
                 
                 // Calculate approximate token count (embeddings.length / embedding_dim)
                 const numTokens = Math.floor(embeddings.length / this.embeddingDim);
@@ -194,7 +201,8 @@ class MxbaiEdgeColbertIntegration {
                     isReal: true
                 };
             } catch (error) {
-                console.error('❌ Real encoding failed, falling back to simulation:', error);
+                console.error(`❌ Real ${textType} encoding failed, falling back to simulation:`, error);
+                console.error('Error details:', error);
                 return this.simulateEncoding(text);
             }
         } else {
@@ -310,7 +318,8 @@ class MxbaiEdgeColbertIntegration {
         const documentEmbeddings = [];
         for (const doc of documents) {
             const fullText = `${doc.title} ${doc.content}`;
-            const result = await this.encodeText(fullText);
+            // Encode as document (is_query: false)
+            const result = await this.encodeText(fullText, false);
             documentEmbeddings.push({
                 id: doc.id,
                 title: doc.title,
@@ -359,8 +368,8 @@ class MxbaiEdgeColbertIntegration {
     async searchDocuments(query, documents, topK = 5) {
         console.log(`🔍 Searching for: "${query}"`);
 
-        // 1. Encode the query
-        const queryResult = await this.encodeText(query);
+        // 1. Encode the query (is_query: true)
+        const queryResult = await this.encodeText(query, true);
 
         // 2. Calculate scores against all documents
         const scores = [];
