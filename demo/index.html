@@ -88,6 +88,8 @@
         <h3>2. Load Index</h3>
         <p>In a real implementation, this would load a pre-built FastPlaid index.</p>
         <button id="loadIndexBtn" disabled>Load Sample Index</button>
+        <button id="forceRealModelBtn" disabled style="background: #ff9800;">🚀 Force Real Model</button>
+        <button id="tryMxbaiBtn" disabled style="background: #9c27b0; color: white;">🎯 Try mxbai Model</button>
         <div id="indexStatus"></div>
     </div>
 
@@ -116,6 +118,7 @@
         <p><strong>Search Algorithm:</strong> ColBERT MaxSim scoring</p>
         <p><strong>Pipeline:</strong> Text → mxbai-edge-colbert → Token Embeddings → FastPlaid → Ranked Results</p>
         <p><strong>Status:</strong> <span id="techStatus">Demo mode with simulated embeddings</span></p>
+        <p><strong>Debug:</strong> <a href="test-pylate.html" target="_blank">Test pylate-rs Integration</a></p>
     </div>
 
     <script type="module">
@@ -131,6 +134,8 @@
         // DOM elements
         const initBtn = document.getElementById('initBtn');
         const loadIndexBtn = document.getElementById('loadIndexBtn');
+        const forceRealModelBtn = document.getElementById('forceRealModelBtn');
+        const tryMxbaiBtn = document.getElementById('tryMxbaiBtn');
         const searchBtn = document.getElementById('searchBtn');
         const initStatus = document.getElementById('initStatus');
         const indexStatus = document.getElementById('indexStatus');
@@ -167,18 +172,28 @@
                 
                 wasmInitialized = true;
                 
-                // Update technical status
+                // Update technical status with detailed information
                 const modelStatus = mxbaiIntegration.getModelStatus();
                 const techStatus = document.getElementById('techStatus');
                 if (techStatus) {
-                    const statusText = modelStatus.hasRealModel ? 
-                        'Real pylate-rs model loaded from Hugging Face' : 
-                        'Simulation mode (real model loading failed)';
+                    let statusText = '';
+                    if (modelStatus.hasRealModel) {
+                        statusText = `🚀 Real ${modelStatus.modelRepo} loaded via pylate-rs`;
+                    } else if (modelStatus.pylateLoaded) {
+                        statusText = `🎭 pylate-rs loaded, but model failed - using simulation`;
+                    } else {
+                        statusText = `❌ pylate-rs failed to load - using simulation`;
+                    }
                     techStatus.textContent = statusText;
                 }
                 
+                // Log detailed status for debugging
+                console.log('🔍 Model Status:', modelStatus);
+                
                 showSuccess(initStatus, 'WASM module and mxbai-edge-colbert initialized successfully!');
                 loadIndexBtn.disabled = false;
+                forceRealModelBtn.disabled = false;
+                tryMxbaiBtn.disabled = false;
                 
             } catch (error) {
                 showError(initStatus, `Failed to initialize: ${error.message}`);
@@ -209,6 +224,49 @@
             } catch (error) {
                 showError(indexStatus, `Failed to create index: ${error.message}`);
                 console.error('Index creation error:', error);
+            }
+        });
+
+        // Force real model loading
+        forceRealModelBtn.addEventListener('click', async () => {
+            try {
+                indexStatus.innerHTML = '<div>🔄 Force retrying real model loading...</div>';
+                
+                const success = await mxbaiIntegration.forceRealModel();
+                if (success) {
+                    showSuccess(indexStatus, '🚀 Real model loaded successfully! Try creating index again.');
+                } else {
+                    showError(indexStatus, '❌ Real model loading failed. Check console for details.');
+                }
+                
+            } catch (error) {
+                showError(indexStatus, `Force retry failed: ${error.message}`);
+                console.error('Force retry error:', error);
+            }
+        });
+
+        // Try mxbai model specifically
+        tryMxbaiBtn.addEventListener('click', async () => {
+            try {
+                indexStatus.innerHTML = '<div>🎯 Trying mxbai-edge-colbert-v0-17m specifically...</div>';
+                
+                const success = await mxbaiIntegration.tryMxbaiModel();
+                if (success) {
+                    showSuccess(indexStatus, '🎉 mxbai-edge-colbert model loaded! Try creating index again.');
+                    
+                    // Update technical status
+                    const modelStatus = mxbaiIntegration.getModelStatus();
+                    const techStatus = document.getElementById('techStatus');
+                    if (techStatus) {
+                        techStatus.textContent = `🚀 Real ${modelStatus.modelRepo} loaded via pylate-rs`;
+                    }
+                } else {
+                    showError(indexStatus, '❌ mxbai model loading failed. Check console for details.');
+                }
+                
+            } catch (error) {
+                showError(indexStatus, `mxbai model failed: ${error.message}`);
+                console.error('mxbai model error:', error);
             }
         });
 

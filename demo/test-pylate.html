@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Test pylate-rs Integration</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .log { background: #f5f5f5; padding: 10px; margin: 10px 0; border-radius: 4px; }
+        .error { background: #ffebee; color: #c62828; }
+        .success { background: #e8f5e8; color: #2e7d32; }
+        button { padding: 10px 20px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>pylate-rs Integration Test</h1>
+    
+    <button onclick="testPylateImport()">1. Test pylate-rs Import</button>
+    <button onclick="testModelLoading()">2. Test Model Loading</button>
+    <button onclick="testEncoding()">3. Test Encoding</button>
+    
+    <div id="logs"></div>
+
+    <script type="module">
+        let ColBERT = null;
+        let model = null;
+        
+        function log(message, type = 'log') {
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            document.getElementById('logs').appendChild(div);
+            console.log(message);
+        }
+        
+        window.testPylateImport = async function() {
+            try {
+                log('🚀 Testing pylate-rs import...');
+                
+                const pylateModule = await import('./node_modules/pylate-rs/pylate_rs.js');
+                log('✅ pylate-rs module imported');
+                
+                await pylateModule.default();
+                log('✅ WASM initialized');
+                
+                ColBERT = pylateModule.ColBERT;
+                log(`✅ ColBERT class available: ${typeof ColBERT}`);
+                
+                log('🎉 pylate-rs import test successful!', 'success');
+                
+            } catch (error) {
+                log(`❌ pylate-rs import failed: ${error.message}`, 'error');
+                console.error(error);
+            }
+        };
+        
+        window.testModelLoading = async function() {
+            if (!ColBERT) {
+                log('❌ ColBERT not available. Run import test first.', 'error');
+                return;
+            }
+            
+            try {
+                log('📥 Testing model loading with lightonai/answerai-colbert-small-v1...');
+                
+                const modelRepo = 'lightonai/answerai-colbert-small-v1';
+                const requiredFiles = [
+                    'tokenizer.json',
+                    'model.safetensors',
+                    'config.json',
+                    'config_sentence_transformers.json',
+                    '1_Dense/model.safetensors',
+                    '1_Dense/config.json',
+                    'special_tokens_map.json',
+                ];
+                
+                log(`🔍 Fetching ${requiredFiles.length} files...`);
+                
+                const responses = await Promise.all(
+                    requiredFiles.map(file => 
+                        fetch(`https://huggingface.co/${modelRepo}/resolve/main/${file}`)
+                    )
+                );
+                
+                // Check responses
+                for (let i = 0; i < responses.length; i++) {
+                    const response = responses[i];
+                    const file = requiredFiles[i];
+                    if (!response.ok) {
+                        throw new Error(`Failed to fetch ${file}: ${response.status}`);
+                    }
+                    log(`✅ Fetched ${file} (${response.headers.get('content-length')} bytes)`);
+                }
+                
+                log('🔧 Converting to Uint8Arrays...');
+                const modelFiles = await Promise.all(
+                    responses.map(res => res.arrayBuffer().then(b => new Uint8Array(b)))
+                );
+                
+                log('🏗️ Initializing ColBERT model...');
+                const [tokenizer, modelData, config, stConfig, dense, denseConfig, tokensConfig] = modelFiles;
+                
+                model = new ColBERT(
+                    modelData,
+                    dense,
+                    tokenizer,
+                    config,
+                    stConfig,
+                    denseConfig,
+                    tokensConfig,
+                    32
+                );
+                
+                log('🎉 Model loading test successful!', 'success');
+                
+            } catch (error) {
+                log(`❌ Model loading failed: ${error.message}`, 'error');
+                console.error(error);
+            }
+        };
+        
+        window.testEncoding = async function() {
+            if (!model) {
+                log('❌ Model not loaded. Run model loading test first.', 'error');
+                return;
+            }
+            
+            try {
+                log('🔤 Testing text encoding...');
+                
+                const testText = "Hello world, this is a test.";
+                log(`📝 Encoding: "${testText}"`);
+                
+                const embeddings = await model.encode(testText);
+                log(`✅ Encoding successful! Generated ${embeddings.length} values`);
+                log(`📊 First 10 values: [${embeddings.slice(0, 10).map(x => x.toFixed(4)).join(', ')}...]`);
+                
+                log('🎉 Encoding test successful!', 'success');
+                
+            } catch (error) {
+                log(`❌ Encoding failed: ${error.message}`, 'error');
+                console.error(error);
+            }
+        };
+    </script>
+</body>
+</html>
