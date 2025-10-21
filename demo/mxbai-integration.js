@@ -183,8 +183,27 @@ class MxbaiEdgeColbertIntegration {
         if (this.model && !this.simulationMode) {
             // Use real pylate-rs model
             try {
-                // pylate-rs WASM encode method: encode(sentences_array, is_query_boolean)
-                const rawEmbeddings = await this.model.encode([text], isQuery);
+                // Try different API formats for pylate-rs WASM
+                let rawEmbeddings;
+                try {
+                    // Format 1: {sentences: [...]}, is_query
+                    rawEmbeddings = await this.model.encode({
+                        sentences: [text]
+                    }, isQuery);
+                } catch (e1) {
+                    console.log(`Format 1 failed: ${e1.message}, trying format 2...`);
+                    try {
+                        // Format 2: [sentences], is_query
+                        rawEmbeddings = await this.model.encode([text], isQuery);
+                    } catch (e2) {
+                        console.log(`Format 2 failed: ${e2.message}, trying format 3...`);
+                        // Format 3: {sentences: [...], is_query: boolean}
+                        rawEmbeddings = await this.model.encode({
+                            sentences: [text],
+                            is_query: isQuery
+                        });
+                    }
+                }
                 
                 console.log(`✅ Raw ${textType} embeddings received`);
                 console.log(`🔍 Embeddings type: ${typeof rawEmbeddings}`);

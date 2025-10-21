@@ -131,7 +131,32 @@
                 const testQuery = "What is machine learning?";
                 log(`📝 Encoding query: "${testQuery}"`);
                 
-                const embeddings = await model.encode([testQuery], true);
+                // Try different API formats to find the working one
+                let embeddings;
+                try {
+                    log('🧪 Trying format 1: {sentences: [...]}');
+                    embeddings = await model.encode({
+                        sentences: [testQuery]
+                    }, true);
+                } catch (e1) {
+                    log(`❌ Format 1 failed: ${e1.message}`);
+                    try {
+                        log('🧪 Trying format 2: [sentences], is_query');
+                        embeddings = await model.encode([testQuery], true);
+                    } catch (e2) {
+                        log(`❌ Format 2 failed: ${e2.message}`);
+                        try {
+                            log('🧪 Trying format 3: {sentences: [...], is_query: true}');
+                            embeddings = await model.encode({
+                                sentences: [testQuery],
+                                is_query: true
+                            });
+                        } catch (e3) {
+                            log(`❌ Format 3 failed: ${e3.message}`);
+                            throw new Error(`All formats failed. Last error: ${e3.message}`);
+                        }
+                    }
+                }
                 
                 log(`✅ Query encoding successful!`);
                 log(`🔍 Embeddings type: ${typeof embeddings}`);
@@ -175,7 +200,32 @@
                 const testDoc = "Machine learning is a subset of artificial intelligence that enables computers to learn from data.";
                 log(`📝 Encoding document: "${testDoc.substring(0, 50)}..."`);
                 
-                const embeddings = await model.encode([testDoc], false);
+                // Try different API formats to find the working one
+                let embeddings;
+                try {
+                    log('🧪 Trying format 1: {sentences: [...]}');
+                    embeddings = await model.encode({
+                        sentences: [testDoc]
+                    }, false);
+                } catch (e1) {
+                    log(`❌ Format 1 failed: ${e1.message}`);
+                    try {
+                        log('🧪 Trying format 2: [sentences], is_query');
+                        embeddings = await model.encode([testDoc], false);
+                    } catch (e2) {
+                        log(`❌ Format 2 failed: ${e2.message}`);
+                        try {
+                            log('🧪 Trying format 3: {sentences: [...], is_query: false}');
+                            embeddings = await model.encode({
+                                sentences: [testDoc],
+                                is_query: false
+                            });
+                        } catch (e3) {
+                            log(`❌ Format 3 failed: ${e3.message}`);
+                            throw new Error(`All formats failed. Last error: ${e3.message}`);
+                        }
+                    }
+                }
                 
                 log(`✅ Document encoding successful!`);
                 log(`🔍 Embeddings type: ${typeof embeddings}`);
