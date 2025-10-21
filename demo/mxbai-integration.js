@@ -13,11 +13,11 @@ class MxbaiEdgeColbertIntegration {
         this.embeddingDim = 384; // mxbai-edge-colbert embedding dimension
         this.maxSequenceLength = 512; // Typical max length for ColBERT models
         // Use models that are confirmed to work with pylate-rs
-        // Start with known working models, then try mxbai
-        this.modelRepo = 'lightonai/answerai-colbert-small-v1'; // Known to work
+        // Start with known working model, then try mxbai
+        this.modelRepo = 'lightonai/answerai-colbert-small-v1'; // Known to work from test
         this.fallbackModels = [
             'lightonai/GTE-ModernColBERT-v1',
-            'mixedbread-ai/mxbai-edge-colbert-v0-17m' // Try this last
+            'mixedbread-ai/mxbai-edge-colbert-v0-17m' // Try this after known working ones
         ];
         
         // Required files for pylate-rs ColBERT models
@@ -29,6 +29,17 @@ class MxbaiEdgeColbertIntegration {
             '1_Dense/model.safetensors',
             '1_Dense/config.json',
             'special_tokens_map.json',
+        ];
+        
+        // Alternative file structure for some models
+        this.alternativeFiles = [
+            'tokenizer.json',
+            'pytorch_model.bin', // Some models use .bin instead of .safetensors
+            'config.json',
+            'sentence_bert_config.json', // Alternative name
+            '1_Dense/pytorch_model.bin',
+            '1_Dense/config.json',
+            'tokenizer_config.json', // Alternative to special_tokens_map.json
         ];
     }
 
@@ -106,10 +117,12 @@ class MxbaiEdgeColbertIntegration {
      * Load a single model from Hugging Face Hub
      */
     async loadSingleModel(modelRepo) {
-        const fetchAllFiles = async (basePath) => {
+        const fetchAllFiles = async (basePath, fileList) => {
             console.log(`🔍 Fetching files from ${basePath}...`);
+            console.log(`📋 File list:`, fileList);
+            
             const responses = await Promise.all(
-                this.requiredFiles.map(async (file) => {
+                fileList.map(async (file) => {
                     const url = `${basePath}/${file}`;
                     console.log(`📄 Fetching ${file}...`);
                     const response = await fetch(url);
@@ -127,17 +140,35 @@ class MxbaiEdgeColbertIntegration {
         };
 
         let modelFiles;
+        
+        // For browser demo, skip local and go directly to Hugging Face
+        console.log('🌐 Downloading from Hugging Face Hub...');
+        
+        let modelFiles;
         try {
-            // Try local first
-            modelFiles = await fetchAllFiles(`models/${modelRepo}`);
-            console.log('📁 Loaded model from local directory');
-        } catch (e) {
-            console.log('🌐 Local model not found, downloading from Hugging Face Hub...');
-            // Fallback to Hugging Face Hub
+            // Try primary file structure first
+            console.log('🧪 Trying primary file structure...');
             modelFiles = await fetchAllFiles(
-                `https://huggingface.co/${modelRepo}/resolve/main`
+                `https://huggingface.co/${modelRepo}/resolve/main`,
+                this.requiredFiles
             );
-            console.log('📥 Downloaded model from Hugging Face Hub');
+            console.log('📥 Downloaded model with primary file structure');
+        } catch (primaryError) {
+            console.warn('⚠️ Primary file structure failed:', primaryError.message);
+            try {
+                // Try alternative file structure
+                console.log('🧪 Trying alternative file structure...');
+                modelFiles = await fetchAllFiles(
+                    `https://huggingface.co/${modelRepo}/resolve/main`,
+                    this.alternativeFiles
+                );
+                console.log('📥 Downloaded model with alternative file structure');
+            } catch (alternativeError) {
+                console.error(`❌ Both file structures failed for ${modelRepo}`);
+                console.error('Primary error:', primaryError.message);
+                console.error('Alternative error:', alternativeError.message);
+                throw new Error(`Failed to download ${modelRepo}: ${alternativeError.message}`);
+            }
         }
 
         const [
@@ -468,20 +499,53 @@ class MxbaiEdgeColbertIntegration {
     }
 
     /**
-     * Try to load specifically the mxbai model
+     * Try to load specifically the mxbai model with detailed debugging
      */
     async tryMxbaiModel() {
         console.log('🚀 Trying specifically mxbai-edge-colbert-v0-17m...');
         
         try {
             await this.testPylateRs();
-            await this.loadSingleModel('mixedbread-ai/mxbai-edge-colbert-v0-17m');
-            this.modelRepo = 'mixedbread-ai/mxbai-edge-colbert-v0-17m';
+            
+            // Check what files are actually available for mxbai model
+            const modelRepo = 'mixedbread-ai/mxbai-edge-colbert-v0-17m';
+            const basePath = `https://huggingface.co/${modelRepo}/resolve/main`;
+            
+            console.log('🔍 Checking available files for mxbai model...');
+            
+            // Check each required file individually
+            const fileStatus = {};
+            for (const file of this.requiredFiles) {
+                try {
+                    const response = await fetch(`${basePath}/${file}`, { method: 'HEAD' });
+                    fileStatus[file] = response.ok ? '✅' : `❌ ${response.status}`;
+                } catch (e) {
+                    fileStatus[file] = `❌ ${e.message}`;
+                }
+            }
+            
+            console.log('📋 mxbai file availability:', fileStatus);
+            
+            // Count available files
+            const availableFiles = Object.entries(fileStatus).filter(([_, status]) => status === '✅');
+            console.log(`📊 Available files: ${availableFiles.length}/${this.requiredFiles.length}`);
+            
+            if (availableFiles.length < this.requiredFiles.length) {
+                console.warn('⚠️ mxbai model missing required files, using working model instead');
+                // Use the working model from test
+                await this.loadSingleModel('lightonai/answerai-colbert-small-v1');
+                this.modelRepo = 'lightonai/answerai-colbert-small-v1';
+            } else {
+                // Try to load mxbai model
+                await this.loadSingleModel(modelRepo);
+                this.modelRepo = modelRepo;
+            }
+            
             this.simulationMode = false;
-            console.log('🎉 mxbai model loaded successfully!');
+            console.log(`🎉 Model loaded successfully: ${this.modelRepo}`);
             return true;
         } catch (error) {
-            console.error('❌ mxbai model failed:', error);
+            console.error('❌ Model loading failed:', error);
             return false;
         }
     }
