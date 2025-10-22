@@ -309,25 +309,42 @@ let embeddings = Float32Array::new(length); // Each float = 4 bytes
 
 ## Future Optimization Opportunities
 
-### 1. Approximate Search (PLAID)
-**Current:** Exhaustive search (all documents)
-**Improvement:** IVF clustering + residual quantization
-**Expected Gain:** 10-100x for large datasets (>10K docs)
+> **NOTE**: The full PLAID implementation (IVF + quantization) **already exists** in the Rust library (`rust/search/`, `rust/utils/`) but has not been ported to the WASM demo yet. See [PLAID_WASM_ROADMAP.md](PLAID_WASM_ROADMAP.md) for detailed implementation plan.
 
-### 2. Binary Serialization
+### 1. Approximate Search (PLAID/IVF)
+**Current:** Exhaustive search (all documents)
+**Status:** ✅ Implemented in Rust library, ❌ Not ported to WASM
+**Effort:** 4-6 hours for simplified IVF (no quantization)
+**Expected Gain:** 10-100x for large datasets (>1K docs)
+**Location:** See `rust/search/search.rs::search()` for reference implementation
+
+**Recommendation:** Only implement for >1,000 document use cases. Current exhaustive search is optimal for the 100-doc demo.
+
+### 2. Residual Quantization
+**Current:** Full f32 precision (32-bit)
+**Status:** ✅ Fully implemented in `rust/utils/residual_codec.rs`
+**Effort:** 8-12 hours to port to WASM
+**Expected Gain:** 50% memory reduction (f32 → f16), minimal speed impact
+**Complexity:** HIGH - requires bit-packing and codebook lookups
+
+**Recommendation:** Only needed for 10K+ documents where memory becomes critical.
+
+### 3. Binary Serialization
 **Current:** JSON serialization (~0.1ms)
+**Status:** ❌ Not implemented
 **Improvement:** Use bincode for binary format
 **Expected Gain:** ~50% reduction in serialization time
 
-### 3. Parallel Search
+**Recommendation:** LOW priority - serialization is already <2% of total time.
+
+### 4. Parallel Search (Web Workers)
 **Current:** Single-threaded SIMD
+**Status:** ❌ Not implemented
 **Improvement:** Web Workers + SIMD (multi-core)
 **Expected Gain:** 2-4x on multi-core systems
+**Effort:** 2-3 hours
 
-### 4. Quantization
-**Current:** Full f32 precision (32-bit)
-**Improvement:** f16 or int8 quantization
-**Expected Gain:** 2x memory + potential speedup
+**Recommendation:** Consider for 10K+ documents or batch query processing.
 
 ## Benchmarking Methodology
 
