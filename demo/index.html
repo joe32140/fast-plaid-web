@@ -62,8 +62,9 @@
             margin: 10px 0;
         }
         .result-item {
-            padding: 10px;
+            padding: 15px;
             border-bottom: 1px solid #eee;
+            margin-bottom: 10px;
         }
         .result-item:last-child {
             border-bottom: none;
@@ -71,6 +72,33 @@
         .score {
             font-weight: bold;
             color: #1976d2;
+        }
+        .content-preview {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 8px;
+            line-height: 1.4;
+        }
+        .timing-info {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        .stats-table th, .stats-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .stats-table th {
+            background-color: #f2f2f2;
         }
     </style>
 </head>
@@ -85,13 +113,14 @@
     </div>
 
     <div class="container">
-        <h3>2. Load Index</h3>
-        <p>In a real implementation, this would load a pre-built FastPlaid index.</p>
-        <button id="loadIndexBtn" disabled>Load Sample Index</button>
-        <button id="forceRealModelBtn" disabled style="background: #ff9800;">🚀 Force Real Model</button>
-        <button id="tryMxbaiBtn" disabled style="background: #9c27b0; color: white;">🎯 Try mxbai Model</button>
-        <div style="font-size: 0.9em; color: #666; margin-top: 5px;">
-            💡 After trying mxbai model, click "Load Sample Index" to rebuild with new model
+        <h3>2. Select Model & Create Index</h3>
+        <p>Choose a ColBERT model and create document index:</p>
+        <button id="loadMxbaiBtn" disabled style="background: #9c27b0; color: white;">🎯 mixedbread-ai/mxbai-edge-colbert-v0-17m</button>
+        <button id="loadColbertBtn" disabled style="background: #ff9800;">🚀 lightonai/answerai-colbert-small-v1</button>
+        <div style="font-size: 0.9em; color: #666; margin-top: 10px;">
+            <strong>Model IDs:</strong><br>
+            • <code>mixedbread-ai/mxbai-edge-colbert-v0-17m</code> - 17M parameters, edge-optimized<br>
+            • <code>lightonai/answerai-colbert-small-v1</code> - Small ColBERT model, proven working
         </div>
         <div id="indexStatus"></div>
     </div>
@@ -103,7 +132,10 @@
         <br>
         <label>Top K results: <input type="number" id="topK" value="5" min="1" max="20"></label>
         <br>
+        <label><input type="checkbox" id="useFastPlaid" checked> Use FastPlaid (uncheck for direct MaxSim)</label>
+        <br>
         <button id="searchBtn" disabled>Search</button>
+        <button id="resetStatsBtn" disabled style="background: #ff9800;">Reset Performance Stats</button>
         <div id="searchStatus"></div>
     </div>
 
@@ -113,13 +145,20 @@
     </div>
 
     <div class="container">
+        <h3>5. Performance Statistics</h3>
+        <div id="performanceStats"></div>
+    </div>
+
+    <div class="container">
         <h3>Technical Details</h3>
         <p><strong>Model:</strong> mixedbread-ai/mxbai-edge-colbert-v0-17m (17M parameters)</p>
         <p><strong>Embedding Dimension:</strong> 384 (optimized for edge deployment)</p>
-        <p><strong>Index:</strong> FastPlaid with IVF clustering + residual quantization</p>
+        <p><strong>Document Count:</strong> 100 documents (ML, ColBERT, pylate, mixedbread + fun content)</p>
+        <p><strong>Search Methods:</strong> FastPlaid indexing OR Direct MaxSim computation</p>
         <p><strong>Runtime:</strong> Pure WASM (no server calls)</p>
-        <p><strong>Search Algorithm:</strong> ColBERT MaxSim scoring</p>
-        <p><strong>Pipeline:</strong> Text → mxbai-edge-colbert → Token Embeddings → FastPlaid → Ranked Results</p>
+        <p><strong>Search Algorithm:</strong> ColBERT MaxSim scoring with token-level embeddings</p>
+        <p><strong>Pipeline:</strong> Text → mxbai-edge-colbert → Token Embeddings → Search → Ranked Results</p>
+        <p><strong>Performance Tracking:</strong> Model encoding, query encoding, search time breakdown</p>
         <p><strong>Status:</strong> <span id="techStatus">Demo mode with simulated embeddings</span></p>
         <p><strong>Embeddings:</strong> <span id="embeddingStatus">🎭 Simulated (no model loaded)</span></p>
         <p><strong>Debug:</strong> <a href="test-pylate.html" target="_blank">Test pylate-rs Integration</a></p>
@@ -127,7 +166,7 @@
 
     <script type="module">
         // Import our integration and WASM modules
-        import init, { FastPlaidWasm } from './pkg/fast_plaid_rust.js';
+        import init, { FastPlaidWasm } from './pkg/fast_plaid_rust.js?v=8';
 
         let fastPlaid = null;
         let mxbaiIntegration = null;
@@ -151,16 +190,18 @@
 
         // DOM elements
         const initBtn = document.getElementById('initBtn');
-        const loadIndexBtn = document.getElementById('loadIndexBtn');
-        const forceRealModelBtn = document.getElementById('forceRealModelBtn');
-        const tryMxbaiBtn = document.getElementById('tryMxbaiBtn');
+        const loadMxbaiBtn = document.getElementById('loadMxbaiBtn');
+        const loadColbertBtn = document.getElementById('loadColbertBtn');
         const searchBtn = document.getElementById('searchBtn');
+        const resetStatsBtn = document.getElementById('resetStatsBtn');
         const initStatus = document.getElementById('initStatus');
         const indexStatus = document.getElementById('indexStatus');
         const searchStatus = document.getElementById('searchStatus');
         const results = document.getElementById('results');
         const queryInput = document.getElementById('queryInput');
         const topKInput = document.getElementById('topK');
+        const useFastPlaidInput = document.getElementById('useFastPlaid');
+        const performanceStats = document.getElementById('performanceStats');
 
         // Utility functions
         function showError(element, message) {
@@ -183,6 +224,9 @@
                 // Initialize WASM
                 await init();
                 fastPlaid = new FastPlaidWasm();
+                
+                // Make FastPlaid available globally for the integration
+                window.fastPlaid = fastPlaid;
                 
                 // Initialize mxbai-edge-colbert integration
                 mxbaiIntegration = new MxbaiEdgeColbertIntegration();
@@ -209,9 +253,8 @@
                 console.log('🔍 Model Status:', modelStatus);
                 
                 showSuccess(initStatus, 'WASM module and mxbai-edge-colbert initialized successfully!');
-                loadIndexBtn.disabled = false;
-                forceRealModelBtn.disabled = false;
-                tryMxbaiBtn.disabled = false;
+                loadMxbaiBtn.disabled = false;
+                loadColbertBtn.disabled = false;
                 
             } catch (error) {
                 showError(initStatus, `Failed to initialize: ${error.message}`);
@@ -219,92 +262,69 @@
             }
         });
 
-        // Load index and create document embeddings
-        loadIndexBtn.addEventListener('click', async () => {
+        // Load mxbai model and create index
+        loadMxbaiBtn.addEventListener('click', async () => {
+            await loadModelAndCreateIndex('mixedbread-ai/mxbai-edge-colbert-v0-17m', '🎯 mxbai-edge-colbert');
+        });
+
+        // Load colbert-small model and create index
+        loadColbertBtn.addEventListener('click', async () => {
+            await loadModelAndCreateIndex('lightonai/answerai-colbert-small-v1', '🚀 answerai-colbert-small');
+        });
+
+        // Common function to load model and create index
+        async function loadModelAndCreateIndex(modelId, displayName) {
             try {
-                indexStatus.innerHTML = '<div>Creating document index with mxbai-edge-colbert...</div>';
+                const indexStartTime = performance.now();
+                indexStatus.innerHTML = `<div>Loading ${displayName} and creating document index...</div>`;
+                
+                // Load the specific model
+                await mxbaiIntegration.loadSpecificModel(modelId);
+                
+                // Update technical status
+                const modelStatus = mxbaiIntegration.getModelStatus();
+                const techStatus = document.getElementById('techStatus');
+                if (techStatus) {
+                    let statusText = '';
+                    if (modelStatus.hasRealModel) {
+                        statusText = `🚀 Real ${modelStatus.modelRepo} loaded via pylate-rs`;
+                    } else if (modelStatus.pylateLoaded) {
+                        statusText = `🎭 pylate-rs loaded, but model failed - using simulation`;
+                    } else {
+                        statusText = `❌ pylate-rs failed to load - using simulation`;
+                    }
+                    techStatus.textContent = statusText;
+                }
                 
                 // Create sample documents and encode them
                 const documents = mxbaiIntegration.createSampleDocuments();
                 documentIndex = await mxbaiIntegration.createDocumentIndex(documents);
-                
-                // Load into FastPlaid (placeholder for now)
-                const dummyIndexBytes = new Uint8Array([1, 2, 3, 4, 5]);
+
+                // Load document embeddings into FastPlaid WASM
                 try {
-                    await fastPlaid.load_index(dummyIndexBytes);
+                    await mxbaiIntegration.createFastPlaidIndex(documentIndex);
+                    console.log('✅ FastPlaid index created successfully');
                 } catch (error) {
-                    // Expected - placeholder implementation
+                    console.warn('⚠️ Failed to create FastPlaid index:', error);
+                    // Continue - will fall back to Direct MaxSim
                 }
                 
-                showSuccess(indexStatus, `Document index created! ${documents.length} documents encoded with mxbai-edge-colbert`);
+                const indexTime = performance.now() - indexStartTime;
+                const realCount = documentIndex.filter(doc => doc.isReal).length;
+                
+                showSuccess(indexStatus, 
+                    `✅ ${displayName} loaded! ${documents.length} documents indexed (${realCount} real embeddings) in ${indexTime.toFixed(2)}ms`
+                );
                 searchBtn.disabled = false;
+                resetStatsBtn.disabled = false;
                 
             } catch (error) {
-                showError(indexStatus, `Failed to create index: ${error.message}`);
-                console.error('Index creation error:', error);
+                showError(indexStatus, `Failed to load ${displayName}: ${error.message}`);
+                console.error('Model loading error:', error);
             }
-        });
+        }
 
-        // Force real model loading
-        forceRealModelBtn.addEventListener('click', async () => {
-            try {
-                indexStatus.innerHTML = '<div>🔄 Force retrying real model loading...</div>';
-                
-                const success = await mxbaiIntegration.forceRealModel();
-                if (success) {
-                    showSuccess(indexStatus, '🚀 Real model loaded successfully! Try creating index again.');
-                } else {
-                    showError(indexStatus, '❌ Real model loading failed. Check console for details.');
-                }
-                
-            } catch (error) {
-                showError(indexStatus, `Force retry failed: ${error.message}`);
-                console.error('Force retry error:', error);
-            }
-        });
-
-        // Try mxbai model specifically and rebuild index
-        tryMxbaiBtn.addEventListener('click', async () => {
-            try {
-                indexStatus.innerHTML = '<div>🎯 Loading mxbai-edge-colbert-v0-17m and rebuilding index...</div>';
-                
-                const success = await mxbaiIntegration.tryMxbaiModel();
-                if (success) {
-                    // Update technical status
-                    const modelStatus = mxbaiIntegration.getModelStatus();
-                    const techStatus = document.getElementById('techStatus');
-                    if (techStatus) {
-                        techStatus.textContent = `🚀 Real ${modelStatus.modelRepo} loaded via pylate-rs`;
-                    }
-                    
-                    // Automatically rebuild the document index with the new model
-                    indexStatus.innerHTML = '<div>🔄 Rebuilding document index with mxbai-edge-colbert...</div>';
-                    
-                    const documents = mxbaiIntegration.createSampleDocuments();
-                    documentIndex = await mxbaiIntegration.createDocumentIndex(documents);
-                    
-                    // Load into FastPlaid (placeholder for now)
-                    const dummyIndexBytes = new Uint8Array([1, 2, 3, 4, 5]);
-                    try {
-                        await fastPlaid.load_index(dummyIndexBytes);
-                    } catch (error) {
-                        // Expected - placeholder implementation
-                    }
-                    
-                    showSuccess(indexStatus, `🎉 mxbai-edge-colbert loaded and ${documents.length} documents indexed! Ready to search.`);
-                    searchBtn.disabled = false;
-                    
-                } else {
-                    showError(indexStatus, '❌ mxbai model loading failed. Check console for details.');
-                }
-                
-            } catch (error) {
-                showError(indexStatus, `mxbai model failed: ${error.message}`);
-                console.error('mxbai model error:', error);
-            }
-        });
-
-        // Search using mxbai-edge-colbert + FastPlaid
+        // Search using mxbai-edge-colbert + FastPlaid or Direct MaxSim
         searchBtn.addEventListener('click', async () => {
             try {
                 const query = queryInput.value.trim();
@@ -314,18 +334,24 @@
                 }
 
                 const topK = parseInt(topKInput.value) || 5;
-                
-                searchStatus.innerHTML = '<div>Encoding query with mxbai-edge-colbert and searching...</div>';
+                const useFastPlaid = useFastPlaidInput.checked;
+
+                const requestedMethod = useFastPlaid ? 'FastPlaid' : 'Direct MaxSim';
+                searchStatus.innerHTML = `<div>Encoding query with mxbai-edge-colbert and searching using ${requestedMethod}...</div>`;
                 results.innerHTML = '';
 
                 if (documentIndex && mxbaiIntegration) {
                     // Use real mxbai-edge-colbert integration
-                    const searchResults = await mxbaiIntegration.searchDocuments(
-                        query, 
-                        documentIndex, 
-                        topK
+                    const searchResult = await mxbaiIntegration.searchDocuments(
+                        query,
+                        documentIndex,
+                        topK,
+                        useFastPlaid
                     );
-                    
+
+                    const searchResults = searchResult.results;
+                    const timings = searchResult.timings;
+
                     // Update embedding status
                     const embeddingStatus = document.getElementById('embeddingStatus');
                     const realResults = searchResults.filter(r => r.isReal).length;
@@ -336,9 +362,12 @@
                             embeddingStatus.innerHTML = `🎭 Simulated embeddings (model failed)`;
                         }
                     }
-                    
-                    showSuccess(searchStatus, `Found ${searchResults.length} results using mxbai-edge-colbert + FastPlaid`);
-                    displayMxbaiResults(searchResults, query);
+
+                    // Use the actual method from timings (accounts for fallbacks)
+                    const actualMethod = timings.method || requestedMethod;
+                    showSuccess(searchStatus, `Found ${searchResults.length} results using mxbai-edge-colbert + ${actualMethod}`);
+                    displayMxbaiResults(searchResults, query, timings);
+                    updatePerformanceStats();
                 } else {
                     // Fallback to demo results
                     const embeddingStatus = document.getElementById('embeddingStatus');
@@ -352,6 +381,15 @@
             } catch (error) {
                 showError(searchStatus, `Search failed: ${error.message}`);
                 console.error('Search error:', error);
+            }
+        });
+
+        // Reset performance statistics
+        resetStatsBtn.addEventListener('click', () => {
+            if (mxbaiIntegration) {
+                mxbaiIntegration.resetPerformanceStats();
+                updatePerformanceStats();
+                showSuccess(document.getElementById('searchStatus'), 'Performance statistics reset');
             }
         });
 
@@ -375,25 +413,129 @@
             results.innerHTML = html;
         }
 
-        function displayMxbaiResults(searchResults, query) {
+        function displayMxbaiResults(searchResults, query, timings) {
             let html = '<div class="results">';
-            html += `<div><strong>mxbai-edge-colbert Results for:</strong> "${query}"</div><br>`;
+            html += `<div><strong>mxbai-edge-colbert Results for:</strong> "${query}"</div>`;
+            
+            // Display timing information
+            if (timings) {
+                html += `
+                    <div class="timing-info">
+                        <strong>⏱️ Performance Breakdown:</strong><br>
+                        Query Encoding: ${timings.queryEncoding.toFixed(2)}ms<br>
+                        Search Time (${timings.method}): ${timings.searchTime.toFixed(2)}ms<br>
+                        Total Time: ${timings.totalTime.toFixed(2)}ms
+                    </div>
+                `;
+            }
+            
             searchResults.forEach((result, index) => {
                 const statusIcon = result.isReal ? '🚀' : '🎭';
                 const statusText = result.isReal ? 'Real pylate-rs embeddings' : 'Simulated embeddings';
+                const contentPreview = result.content ? 
+                    (result.content.length > 200 ? result.content.substring(0, 200) + '...' : result.content) : 
+                    'No content available';
+                
                 html += `
                     <div class="result-item">
                         <div><strong>${result.title}</strong></div>
                         <div>Document ID: ${result.id}</div>
                         <div class="score">ColBERT MaxSim Score: ${result.score.toFixed(4)}</div>
+                        <div class="content-preview">${contentPreview}</div>
                         <div style="font-size: 0.9em; color: #666; margin-top: 5px;">
-                            ${statusIcon} ${statusText}
+                            ${statusIcon} ${statusText} | Tokens: ${result.numTokens || 'N/A'}
+                            ${result.encodingTime ? ` | Encoding: ${result.encodingTime.toFixed(2)}ms` : ''}
                         </div>
                     </div>
                 `;
             });
             html += '</div>';
             results.innerHTML = html;
+        }
+
+        function updatePerformanceStats() {
+            if (!mxbaiIntegration) return;
+
+            const stats = mxbaiIntegration.getPerformanceStats();
+            let html = '<table class="stats-table">';
+            html += '<tr><th>Metric</th><th>Count</th><th>Avg (ms)</th><th>Min (ms)</th><th>Max (ms)</th></tr>';
+
+            const metrics = [
+                { name: 'Model Encoding', data: stats.modelEncoding },
+                { name: 'Query Encoding', data: stats.queryEncoding },
+                { name: 'Search Time', data: stats.searchTime },
+                { name: 'Total Search Time', data: stats.totalSearchTime },
+                { name: 'Index Creation', data: stats.indexTime }
+            ];
+
+            metrics.forEach(metric => {
+                html += `
+                    <tr>
+                        <td>${metric.name}</td>
+                        <td>${metric.data.count}</td>
+                        <td>${metric.data.avg}</td>
+                        <td>${metric.data.min}</td>
+                        <td>${metric.data.max}</td>
+                    </tr>
+                `;
+            });
+
+            html += '</table>';
+
+            // Add memory comparison if available
+            if (stats.memory && stats.memory.fastPlaid.totalBytes > 0) {
+                html += '<h4 style="margin-top: 20px;">Index Memory Comparison</h4>';
+                html += '<table class="stats-table">';
+                html += '<tr><th>Method</th><th>Total Size</th><th>Embeddings</th><th>Metadata</th><th>Efficiency</th></tr>';
+
+                html += `
+                    <tr>
+                        <td><strong>FastPlaid (WASM)</strong></td>
+                        <td>${stats.memory.fastPlaid.total}</td>
+                        <td>${stats.memory.fastPlaid.embeddings}</td>
+                        <td>${stats.memory.fastPlaid.metadata}</td>
+                        <td style="color: #2e7d32; font-weight: bold;">
+                            ${stats.memory.savings ? `↓ ${stats.memory.savings.percent}% smaller` : 'Baseline'}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Direct MaxSim (JS)</strong></td>
+                        <td>${stats.memory.directMaxSim.total}</td>
+                        <td>${stats.memory.directMaxSim.embeddings}</td>
+                        <td>${stats.memory.directMaxSim.metadata}</td>
+                        <td style="color: #c62828;">
+                            ${stats.memory.savings ? `Baseline (uses ${stats.memory.directMaxSim.total})` : '-'}
+                        </td>
+                    </tr>
+                `;
+
+                if (stats.memory.savings) {
+                    html += `
+                        <tr style="background-color: #e8f5e8;">
+                            <td colspan="4"><strong>Memory Savings with FastPlaid:</strong></td>
+                            <td style="color: #2e7d32; font-weight: bold;">
+                                ${stats.memory.savings.absolute} (${stats.memory.savings.percent}%)
+                            </td>
+                        </tr>
+                    `;
+                }
+
+                html += '</table>';
+
+                // Add technical details
+                html += `
+                    <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                        <strong>Technical Details:</strong><br>
+                        • Documents: ${stats.memory.fastPlaid.documentCount}<br>
+                        • Embedding Dimension: ${stats.memory.fastPlaid.embeddingDim}<br>
+                        • FastPlaid: Uses Float32Array (4 bytes/float) in WASM linear memory<br>
+                        • Direct MaxSim: Uses JavaScript numbers (8 bytes/float) in JS heap<br>
+                        • Memory savings: ${stats.memory.savings ? '~' + stats.memory.savings.percent + '% reduction' : 'N/A'}
+                    </div>
+                `;
+            }
+
+            performanceStats.innerHTML = html;
         }
 
         function displayDemoResults(query, topK) {
@@ -423,6 +565,7 @@
 
         // Show initial instructions
         showStatus(initStatus, 'Click "Initialize WASM Module" to start');
+        updatePerformanceStats(); // Initialize empty stats table
         }
 
         // Initialize the app when DOM is loaded
