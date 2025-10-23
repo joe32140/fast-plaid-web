@@ -140,8 +140,9 @@ impl ResidualCodec4bit {
 
     /// Train bucket weights based on actual residual distribution
     fn train_bucket_weights(&mut self, embeddings: &[f32], num_tokens: usize) {
-        // Collect all residuals to compute statistics
-        let mut all_residuals = Vec::with_capacity(num_tokens * self.embedding_dim);
+        // Collect PER-DIMENSION residuals to compute statistics
+        // We need to learn separate bucket weights for each dimension
+        let mut residuals_per_dim: Vec<Vec<f32>> = vec![Vec::with_capacity(num_tokens); self.embedding_dim];
 
         for token_idx in 0..num_tokens {
             let token_start = token_idx * self.embedding_dim;
@@ -154,12 +155,35 @@ impl ResidualCodec4bit {
             for d in 0..self.embedding_dim {
                 // Centered residual: subtract both centroid AND average residual
                 let residual = token_emb[d] - centroid[d] - self.avg_residual[d];
-                all_residuals.push(residual);
+                residuals_per_dim[d].push(residual);
             }
         }
 
-        // Compute percentiles for bucket boundaries (16 buckets = 15 boundaries)
-        all_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        // For each dimension, learn bucket weights from percentiles
+        for d in 0..self.embedding_dim {
+            // Sort residuals for this dimension
+            residuals_per_dim[d].sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+            // For each bucket, compute the average residual value in that percentile range
+            for bucket in 0..16 {
+                let start_pct = bucket as f32 / 16.0;
+                let end_pct = (bucket + 1) as f32 / 16.0;
+
+                let start_idx = (start_pct * residuals_per_dim[d].len() as f32) as usize;
+                let end_idx = (end_pct * residuals_per_dim[d].len() as f32) as usize;
+
+                let bucket_residuals = &residuals_per_dim[d][start_idx..end_idx];
+                let avg_residual: f32 = if bucket_residuals.is_empty() {
+                    0.0
+                } else {
+                    bucket_residuals.iter().sum::<f32>() / bucket_residuals.len() as f32
+                };
+
+                // Update bucket weight for this dimension
+                let weight_idx = bucket * self.embedding_dim + d;
+                self.bucket_weights[weight_idx] = avg_residual;
+            }
+        }
 
         // Phase 2: Compute explicit bucket cutoffs as MIDPOINTS between bucket weights
         // This enables binary search quantization without changing the learned weights
@@ -185,11 +209,9 @@ impl ResidualCodec4bit {
         }
         self.bucket_cutoffs.push(f32::INFINITY);
 
-        // Log residual statistics
-        let min_res = all_residuals.first().copied().unwrap_or(0.0);
-        let max_res = all_residuals.last().copied().unwrap_or(0.0);
-        console_log!("   Residual range: [{:.4}, {:.4}]", min_res, max_res);
-        console_log!("   Bucket cutoffs learned (Phase 2: Native parity)");
+        // Log statistics
+        console_log!("   Bucket weights learned from per-dimension percentiles");
+        console_log!("   Bucket cutoffs computed as midpoints (Phase 2: Native parity)");
     }
 
     /// Find nearest centroid index for a token embedding
@@ -521,20 +543,13 @@ impl FastPlaidQuantized {
         // IVF Search: Find candidate documents from top clusters
         // NOTE: Native FastPlaid uses token-level IVF (more accurate but complex)
         // WASM uses document-level IVF which is simpler but less accurate
-        // For now, disable IVF by probing all clusters to verify quantization quality
-        let num_probe_clusters = self.num_clusters; // Disable IVF filtering
+        // Probe a subset of clusters for speedup (√num_clusters is a good heuristic)
+        let num_probe_clusters = (self.num_clusters as f32).sqrt().ceil() as usize;
+        let num_probe_clusters = num_probe_clusters.max(3).min(self.num_clusters); // At least 3, at most all
 
-        // Compute query representative (average of all tokens)
-        // Since centroids are averages, we compare with query average
-        let mut query_rep = vec![0.0; self.embedding_dim];
-        for t in 0..query_num_tokens {
-            for d in 0..self.embedding_dim {
-                query_rep[d] += query_emb[t * self.embedding_dim + d];
-            }
-        }
-        for d in 0..self.embedding_dim {
-            query_rep[d] /= query_num_tokens as f32;
-        }
+        // Compute query representative using FIRST TOKEN (matches how we build IVF)
+        // Using first token is more discriminative than averaging for ColBERT
+        let query_rep = query_emb[0..self.embedding_dim].to_vec();
 
         // Score each cluster by similarity to query representative
         let mut cluster_scores: Vec<(usize, f32)> = (0..self.num_clusters)
@@ -560,20 +575,29 @@ impl FastPlaidQuantized {
 
         // Collect candidate documents from top clusters
         let mut candidate_docs: Vec<usize> = Vec::new();
+        let mut cluster_sizes: Vec<usize> = Vec::new();
         for cluster_id in &top_clusters {
+            let cluster_size = self.ivf_clusters[*cluster_id].len();
+            cluster_sizes.push(cluster_size);
             candidate_docs.extend(&self.ivf_clusters[*cluster_id]);
         }
 
         // Debug: check for duplicate candidates
         let mut sorted_candidates = candidate_docs.clone();
         sorted_candidates.sort();
+        let original_count = sorted_candidates.len();
         sorted_candidates.dedup();
-        if sorted_candidates.len() != candidate_docs.len() {
-            console_log!("⚠️  Warning: {} duplicate candidates found!", candidate_docs.len() - sorted_candidates.len());
+        let unique_count = sorted_candidates.len();
+
+        if unique_count != original_count {
+            console_log!("⚠️  Warning: {} duplicate candidates found!", original_count - unique_count);
         }
 
-        console_log!("🔍 IVF Search: Probing {} clusters, {} candidates out of {} total docs",
-            num_probe_clusters, candidate_docs.len(), self.documents.len());
+        console_log!("🔍 IVF Search: Probing {} clusters (sizes: {:?}), {} unique candidates out of {} total docs",
+            num_probe_clusters, cluster_sizes, unique_count, self.documents.len());
+
+        // Use unique candidates only to avoid redundant work
+        let candidate_docs = sorted_candidates;
 
         // Calculate MaxSim score for candidate documents only
         let mut scores: Vec<(i64, f32)> = candidate_docs
@@ -943,8 +967,9 @@ impl FastPlaidQuantized {
 
         console_log!("   Creating {} IVF clusters...", self.num_clusters);
 
-        // Extract document representatives (average of all tokens)
-        // Using average instead of first token gives better clustering quality
+        // Extract document representatives using FIRST TOKEN (not average)
+        // For ColBERT, first token is often the [CLS] token or title, which is more
+        // discriminative than averaging all tokens (which washes out the signal)
         let mut doc_reps = Vec::with_capacity(num_docs);
         let mut offset = 0;
 
@@ -952,18 +977,10 @@ impl FastPlaidQuantized {
             let num_tokens = doc_info[i * 2 + 1] as usize;
             let doc_emb = &embeddings_data[offset..offset + num_tokens * self.embedding_dim];
 
-            // Compute average of all tokens
-            let mut avg = vec![0.0; self.embedding_dim];
-            for t in 0..num_tokens {
-                for d in 0..self.embedding_dim {
-                    avg[d] += doc_emb[t * self.embedding_dim + d];
-                }
-            }
-            for d in 0..self.embedding_dim {
-                avg[d] /= num_tokens as f32;
-            }
+            // Use FIRST token as representative (most discriminative for ColBERT)
+            let first_token = doc_emb[0..self.embedding_dim].to_vec();
+            doc_reps.push(first_token);
 
-            doc_reps.push(avg);
             offset += num_tokens * self.embedding_dim;
         }
 

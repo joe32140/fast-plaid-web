@@ -535,6 +535,30 @@
                 const buildTime = ((performance.now() - startTime) / 1000).toFixed(1);
                 console.log(`✅ FastPlaid index built in ${buildTime}s (4-bit quantization + IVF clustering)`);
 
+                // Optionally save the built index (disabled to avoid repeated downloads)
+                // To save manually: Open browser console and run:
+                //   saveIndexToFile()
+                window.saveIndexToFile = () => {
+                    try {
+                        console.log('💾 Saving built index to fastplaid_index.bin...');
+                        const indexBytes = fastPlaidWasm.save_index();
+                        const blob = new Blob([indexBytes], { type: 'application/octet-stream' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'fastplaid_index.bin';
+                        a.style.display = 'none';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        console.log('✅ Index saved! Move it to demo/data/ to use as precomputed index.');
+                    } catch (err) {
+                        console.error('⚠️  Failed to save index:', err);
+                    }
+                };
+                console.log('💡 To save index: run saveIndexToFile() in console');
+
                 loadingState.fastPlaid.loaded = true;
                 loadingState.fastPlaid.loading = false;
                 updateLoadingUI();
