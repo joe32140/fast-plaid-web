@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Build FastPlaid Index</title>
+</head>
+<body>
+    <h1>Build FastPlaid Index</h1>
+    <p>This page builds the .fastplaid index file from embeddings.bin</p>
+    <button id="buildBtn">Build Index</button>
+    <pre id="output"></pre>
+
+    <script type="module">
+        import init, { FastPlaidQuantized } from './pkg/fast_plaid_rust.js';
+
+        function log(msg) {
+            document.getElementById('output').textContent += msg + '\n';
+            console.log(msg);
+        }
+
+        document.getElementById('buildBtn').addEventListener('click', async () => {
+            try {
+                log('🚀 Starting index build...');
+
+                // Init WASM
+                log('📦 Loading WASM...');
+                await init();
+                log('✅ WASM loaded');
+
+                // Load embeddings.bin
+                log('📥 Loading embeddings.bin...');
+                const embResponse = await fetch('./data/fastplaid_4bit/embeddings.bin');
+                const embData = await embResponse.arrayBuffer();
+
+                const view = new DataView(embData);
+                let offset = 0;
+
+                const numPapers = view.getUint32(offset, true);
+                offset += 4;
+                const embeddingDim = view.getUint32(offset, true);
+                offset += 4;
+
+                log(`   Papers: ${numPapers}, Dim: ${embeddingDim}`);
+
+                // Read all embeddings
+                const embeddings = [];
+                const docInfo = [];
+
+                for (let i = 0; i < numPapers; i++) {
+                    const numTokens = view.getUint32(offset, true);
+                    offset += 4;
+
+                    const embedding = new Float32Array(numTokens * embeddingDim);
+                    for (let j = 0; j < numTokens * embeddingDim; j++) {
+                        embedding[j] = view.getFloat32(offset, true);
+                        offset += 4;
+                    }
+
+                    embeddings.push(embedding);
+                    docInfo.push(BigInt(i));
+                    docInfo.push(BigInt(numTokens));
+                }
+
+                log(`✅ Loaded ${numPapers} papers`);
+
+                // Flatten embeddings
+                let totalSize = 0;
+                for (const emb of embeddings) {
+                    totalSize += emb.length;
+                }
+
+                const flatEmbeddings = new Float32Array(totalSize);
+                let writeOffset = 0;
+                for (const emb of embeddings) {
+                    flatEmbeddings.set(emb, writeOffset);
+                    writeOffset += emb.length;
+                }
+
+                const docInfoArray = new BigInt64Array(docInfo);
+
+                log('🗜️ Building FastPlaid index (this may take 10-15s)...');
+                const fastplaid = new FastPlaidQuantized();
+                await fastplaid.load_documents_quantized(flatEmbeddings, docInfoArray, 256);
+
+                log('💾 Saving index...');
+                const indexBytes = fastplaid.save_index();
+
+                const sizeMB = (indexBytes.length / 1_000_000).toFixed(2);
+                log(`✅ Index built! Size: ${sizeMB} MB`);
+
+                // Download the file
+                const blob = new Blob([indexBytes], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'index.fastplaid';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                log('📥 Download started! Save to demo/data/index.fastplaid');
+
+            } catch (error) {
+                log(`❌ Error: ${error.message}`);
+                console.error(error);
+            }
+        });
+    </script>
+</body>
+</html>

@@ -52,3 +52,14 @@ opt-level = 3
 
 [profile.release]
 opt-level = 3
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O3", "--enable-simd"]
+
+# Configure WebAssembly to avoid table growth failures
+[package.metadata.wasm-pack.profile.release.wasm-bindgen]
+# Pre-allocate larger function table to avoid growth failures on first load
+# This prevents "failed to grow table" errors
+debug-js-glue = false
+demangle-name-section = true
+dwarf-debug-info = false

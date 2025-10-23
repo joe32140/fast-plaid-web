@@ -1,9 +1,17 @@
 // Conditional compilation for WASM vs native
+// Standard WASM module (f32, no quantization)
 #[cfg(target_arch = "wasm32")]
-pub use crate::lib_wasm::*;
+pub use crate::lib_wasm::{FastPlaidWasm, validate_mxbai_embeddings};
 
 #[cfg(target_arch = "wasm32")]
 mod lib_wasm;
+
+// Quantized WASM module (4-bit compression)
+#[cfg(target_arch = "wasm32")]
+pub use crate::lib_wasm_quantized::FastPlaidQuantized;
+
+#[cfg(target_arch = "wasm32")]
+mod lib_wasm_quantized;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod index;

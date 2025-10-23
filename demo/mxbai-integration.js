@@ -10,15 +10,13 @@ class MxbaiEdgeColbertIntegration {
     constructor() {
         this.model = null;
         this.modelLoaded = false;
-        this.embeddingDim = 384; // mxbai-edge-colbert embedding dimension
+        // NOTE: mxbai-edge-colbert-v0-17m outputs 48 dims (with 2_Dense projection)
+        // pylate-rs now supports 2_Dense layers!
+        this.embeddingDim = 48; // Correct output with 2_Dense: 256->512->48
         this.maxSequenceLength = 512; // Typical max length for ColBERT models
-        // Use models that are confirmed to work with pylate-rs
-        // Start with known working model, then try mxbai
-        this.modelRepo = 'lightonai/answerai-colbert-small-v1'; // Known to work from test
-        this.fallbackModels = [
-            'lightonai/GTE-ModernColBERT-v1',
-            'mixedbread-ai/mxbai-edge-colbert-v0-17m' // Try this after known working ones
-        ];
+        // Use mixedbread-ai/mxbai-edge-colbert-v0-17m exclusively
+        this.modelRepo = 'mixedbread-ai/mxbai-edge-colbert-v0-17m';
+        this.fallbackModels = []; // No fallback - use mxbai only
 
         // Performance tracking
         this.timings = {
@@ -48,6 +46,9 @@ class MxbaiEdgeColbertIntegration {
         };
 
         // Required files for pylate-rs ColBERT models
+        // Note: pylate-rs ColBERT now supports multi-stage Dense layers!
+        // mxbai-edge-colbert-v0-17m has 1_Dense (256->512) and 2_Dense (512->48)
+        // With 2_Dense support, we get correct 48-dim embeddings
         this.requiredFiles = [
             'tokenizer.json',
             'model.safetensors',
@@ -55,6 +56,8 @@ class MxbaiEdgeColbertIntegration {
             'config_sentence_transformers.json',
             '1_Dense/model.safetensors',
             '1_Dense/config.json',
+            '2_Dense/model.safetensors',  // Second dense layer: 512 -> 48 (NOW SUPPORTED!)
+            '2_Dense/config.json',
             'special_tokens_map.json',
         ];
 
@@ -66,6 +69,8 @@ class MxbaiEdgeColbertIntegration {
             'sentence_bert_config.json', // Alternative name
             '1_Dense/pytorch_model.bin',
             '1_Dense/config.json',
+            '2_Dense/pytorch_model.bin',  // Second dense layer (alternative format)
+            '2_Dense/config.json',
             'tokenizer_config.json', // Alternative to special_tokens_map.json
         ];
     }
@@ -203,23 +208,119 @@ class MxbaiEdgeColbertIntegration {
             stConfig,
             dense,
             denseConfig,
+            dense2,         // NEW: 2_Dense weights
+            dense2Config,   // NEW: 2_Dense config
             tokensConfig,
         ] = modelFiles;
 
         // Initialize the ColBERT model with pylate-rs
-        console.log('🔧 Initializing ColBERT model...');
-        this.model = new ColBERT(
-            model,
-            dense,
-            tokenizer,
-            config,
-            stConfig,
-            denseConfig,
-            tokensConfig,
-            32 // max_length parameter
-        );
+        console.log('🔧 Initializing ColBERT model with 2_Dense support...');
+        console.log('🔍 Model files being passed to ColBERT constructor:', {
+            model: model ? 'present' : 'missing',
+            dense: dense ? 'present' : 'missing',
+            dense2: dense2 ? 'present (2_Dense!)' : 'missing',  // NEW
+            tokenizer: tokenizer ? 'present' : 'missing',
+            config: config ? 'present' : 'missing',
+            stConfig: stConfig ? 'present' : 'missing',
+            denseConfig: denseConfig ? 'present' : 'missing',
+            dense2Config: dense2Config ? 'present (2_Dense!)' : 'missing',  // NEW
+            tokensConfig: tokensConfig ? 'present' : 'missing'
+        });
 
-        console.log('✅ ColBERT model initialized successfully');
+        try {
+            // Debug: Check all config files
+            console.log('🔍 DEBUG: Checking config files...');
+
+            const configText = new TextDecoder().decode(config);
+            const configObj = JSON.parse(configText);
+            console.log('🔍 config.json architectures:', configObj.architectures);
+            console.log('🔍 config.json size:', config.byteLength, 'bytes');
+
+            const denseConfigText = new TextDecoder().decode(denseConfig);
+            const denseConfigObj = JSON.parse(denseConfigText);
+            console.log('🔍 1_Dense/config.json:', denseConfigObj);
+
+            if (dense2Config) {
+                const dense2ConfigText = new TextDecoder().decode(dense2Config);
+                const dense2ConfigObj = JSON.parse(dense2ConfigText);
+                console.log('🔍 2_Dense/config.json:', dense2ConfigObj);
+            }
+
+            // OVERRIDE: Enable query expansion with 32 tokens
+            console.log('🔧 Enabling query expansion...');
+            const stConfigText = new TextDecoder().decode(stConfig);
+            const stConfigObj = JSON.parse(stConfigText);
+            console.log('🔍 Original config_sentence_transformers.json:', stConfigObj);
+
+            // Enable query expansion and set query length to 32
+            // Note: attend_to_expansion_tokens = false means [MASK] tokens are used during
+            // encoding but not included in output. This makes queries more distinct while
+            // keeping output compact.
+            stConfigObj.do_query_expansion = true;
+            stConfigObj.query_length = 32;
+
+            console.log('✅ Modified config_sentence_transformers.json:', stConfigObj);
+
+            // Re-encode the modified config
+            const modifiedStConfigText = JSON.stringify(stConfigObj);
+            const modifiedStConfig = new TextEncoder().encode(modifiedStConfigText);
+
+            // WASM signature: from_bytes(weights, dense_weights, dense2_weights, tokenizer, config,
+            //                            sentence_transformers_config, dense_config, dense2_config,
+            //                            special_tokens_map, batch_size)
+            console.log('🔧 Parameter sizes:');
+            console.log('  model:', model?.byteLength, 'bytes');
+            console.log('  dense:', dense?.byteLength, 'bytes');
+            console.log('  dense2:', dense2?.byteLength, 'bytes');
+            console.log('  tokenizer:', tokenizer?.byteLength, 'bytes');
+            console.log('  config:', config?.byteLength, 'bytes');
+            console.log('  stConfig:', stConfig?.byteLength, 'bytes');
+            console.log('  denseConfig:', denseConfig?.byteLength, 'bytes');
+            console.log('  dense2Config:', dense2Config?.byteLength, 'bytes');
+            console.log('  tokensConfig:', tokensConfig?.byteLength, 'bytes');
+
+            // Try old signature first (8 params - no 2_Dense)
+            console.log('🧪 Trying OLD signature (without 2_Dense support)...');
+            try {
+                this.model = new ColBERT(
+                    model,            // weights
+                    dense,            // dense_weights
+                    tokenizer,        // tokenizer
+                    config,           // config
+                    modifiedStConfig, // sentence_transformers_config (with query expansion enabled!)
+                    denseConfig,      // dense_config
+                    tokensConfig,     // special_tokens_map
+                    32                // batch_size
+                );
+                console.log('✅ OLD signature worked! WASM does NOT have 2_Dense support yet');
+                console.warn('⚠️ Output will be 512-dim (not 48-dim) - need to rebuild WASM with 2_Dense');
+                this.embeddingDim = 512; // Update to actual output
+            } catch (oldError) {
+                console.log('❌ OLD signature failed:', oldError);
+                console.log('🧪 Trying NEW signature (with 2_Dense)...');
+                this.model = new ColBERT(
+                    model,            // weights (model.safetensors)
+                    dense,            // dense_weights (1_Dense/model.safetensors)
+                    dense2,           // dense2_weights (2_Dense/model.safetensors)
+                    tokenizer,        // tokenizer (tokenizer.json)
+                    config,           // config (config.json)
+                    modifiedStConfig, // sentence_transformers_config (with query expansion enabled!)
+                    denseConfig,      // dense_config (1_Dense/config.json)
+                    dense2Config,     // dense2_config (2_Dense/config.json)
+                    tokensConfig,     // special_tokens_map (special_tokens_map.json)
+                    32                // batch_size
+                );
+                console.log('✅ NEW signature worked! WASM has 2_Dense support!');
+                console.log('📊 Expected output dimension: 48 (with 2_Dense: 256→512→48)');
+            }
+        } catch (error) {
+            console.error('❌ ColBERT constructor failed:', error);
+            console.error('Error type:', typeof error);
+            console.error('Error toString:', String(error));
+            console.error('Error message:', error.message);
+            console.error('Error stack:', error.stack);
+            throw error;
+        }
     }
 
     /**
@@ -250,6 +351,21 @@ class MxbaiEdgeColbertIntegration {
                 console.log(`✅ Raw ${textType} result received`);
                 console.log(`🔍 Result type: ${typeof rawResult}`);
                 console.log(`🔍 Result structure:`, rawResult);
+
+                // DEBUG: Deep inspection of the result structure
+                if (rawResult && rawResult.embeddings) {
+                    console.log(`🔍 DEBUG: rawResult.embeddings is Array:`, Array.isArray(rawResult.embeddings));
+                    console.log(`🔍 DEBUG: rawResult.embeddings.length:`, rawResult.embeddings.length);
+                    if (rawResult.embeddings[0]) {
+                        console.log(`🔍 DEBUG: rawResult.embeddings[0] is Array:`, Array.isArray(rawResult.embeddings[0]));
+                        console.log(`🔍 DEBUG: rawResult.embeddings[0].length:`, rawResult.embeddings[0].length);
+                        if (rawResult.embeddings[0][0]) {
+                            console.log(`🔍 DEBUG: rawResult.embeddings[0][0] is Array:`, Array.isArray(rawResult.embeddings[0][0]));
+                            console.log(`🔍 DEBUG: rawResult.embeddings[0][0].length:`, rawResult.embeddings[0][0].length);
+                            console.log(`🔍 DEBUG: First token vector (first 10 values):`, rawResult.embeddings[0][0].slice(0, 10));
+                        }
+                    }
+                }
 
                 // Handle ColBERT result format based on your working code
                 let embeddings;
@@ -509,6 +625,71 @@ class MxbaiEdgeColbertIntegration {
 
         } catch (error) {
             console.error('❌ Failed to create FastPlaid index:', error);
+            console.error('Error details:', error.stack);
+            // Continue without FastPlaid index - will fall back to direct MaxSim
+        }
+    }
+
+    /**
+     * Create FastPlaid Quantized index from document embeddings (4-bit compression)
+     */
+    async createFastPlaidQuantizedIndex(documentEmbeddings) {
+        console.log('🗜️ Creating FastPlaid Quantized index (4-bit) from document embeddings...');
+
+        if (!window.fastPlaidQuantized) {
+            console.warn('⚠️ FastPlaidQuantized WASM not available, skipping index creation');
+            return;
+        }
+
+        try {
+            // Prepare data for WASM
+            // 1. Flatten all document embeddings into a single Float32Array
+            // 2. Create doc_info array with [id, num_tokens] pairs
+
+            let totalEmbeddings = 0;
+            for (const doc of documentEmbeddings) {
+                totalEmbeddings += doc.embeddings.length;
+            }
+
+            console.log(`📊 Preparing ${documentEmbeddings.length} documents, ${totalEmbeddings} total embeddings for 4-bit quantization`);
+
+            const allEmbeddings = new Float32Array(totalEmbeddings);
+            const docInfo = new BigInt64Array(documentEmbeddings.length * 2); // [id, num_tokens] pairs
+
+            let offset = 0;
+            for (let i = 0; i < documentEmbeddings.length; i++) {
+                const doc = documentEmbeddings[i];
+
+                // Copy embeddings
+                allEmbeddings.set(doc.embeddings, offset);
+                offset += doc.embeddings.length;
+
+                // Set doc info (using BigInt)
+                docInfo[i * 2] = BigInt(doc.id);
+                docInfo[i * 2 + 1] = BigInt(doc.numTokens);
+            }
+
+            console.log(`✅ Prepared ${allEmbeddings.length} embeddings, doc_info: ${docInfo.length} entries`);
+
+            // Load documents into WASM with 4-bit quantization
+            window.fastPlaidQuantized.load_documents_quantized(allEmbeddings, docInfo);
+
+            // Calculate memory usage for FastPlaid Quantized index
+            // 4-bit quantization gives roughly 8x compression
+            const estimatedCompressedBytes = allEmbeddings.length * 4 / 8; // ~8x compression
+            this.indexMemory.fastPlaid.embeddingsBytes = estimatedCompressedBytes;
+            this.indexMemory.fastPlaid.metadataBytes = docInfo.length * 8; // BigInt64 = 8 bytes
+            this.indexMemory.fastPlaid.totalBytes = this.indexMemory.fastPlaid.embeddingsBytes +
+                                                     this.indexMemory.fastPlaid.metadataBytes;
+            this.indexMemory.fastPlaid.documentCount = documentEmbeddings.length;
+            this.indexMemory.fastPlaid.embeddingDim = documentEmbeddings[0]?.embeddings.length / documentEmbeddings[0]?.numTokens || 0;
+
+            console.log(`✅ FastPlaid Quantized (4-bit) index created with ${documentEmbeddings.length} documents`);
+            console.log(`📊 FastPlaid Quantized Memory: ${(this.indexMemory.fastPlaid.totalBytes / 1024 / 1024).toFixed(2)} MB`);
+            console.log(`🗜️ Compression ratio: ~8x (from ${(allEmbeddings.length * 4 / 1024 / 1024).toFixed(2)} MB to ${(estimatedCompressedBytes / 1024 / 1024).toFixed(2)} MB)`);
+
+        } catch (error) {
+            console.error('❌ Failed to create FastPlaid Quantized index:', error);
             console.error('Error details:', error.stack);
             // Continue without FastPlaid index - will fall back to direct MaxSim
         }
@@ -1257,9 +1438,14 @@ class MxbaiEdgeColbertIntegration {
     async searchWithFastPlaid(queryResult, documents, topK) {
         const t_js_start = performance.now();
 
+        // Determine which FastPlaid instance to use based on quantization mode
+        const useQuantization = window.useQuantization || false;
+        const fastPlaidInstance = useQuantization ? window.fastPlaidQuantized : window.fastPlaid;
+        const modeName = useQuantization ? 'FastPlaid Quantized (4-bit)' : 'FastPlaid Uncompressed';
+
         // Get the FastPlaid instance from the global scope
-        if (!window.fastPlaid) {
-            console.warn('⚠️ FastPlaid WASM not available, falling back to direct MaxSim');
+        if (!fastPlaidInstance) {
+            console.warn(`⚠️ ${modeName} WASM not available, falling back to direct MaxSim`);
             return await this.searchWithDirectMaxSim(queryResult, documents, topK);
         }
 
@@ -1269,9 +1455,10 @@ class MxbaiEdgeColbertIntegration {
             const queryShape = new Uint32Array([1, queryResult.numTokens, queryResult.tokenDim || this.embeddingDim]);
             const t_prep_done = performance.now();
 
-            // Call FastPlaid WASM search
+            // Call FastPlaid WASM search (quantized or uncompressed)
             const t_wasm_call = performance.now();
-            const searchResults = window.fastPlaid.search(
+            console.log(`🔍 Using ${modeName} for search`);
+            const searchResults = fastPlaidInstance.search(
                 queryResult.embeddings,
                 queryShape,
                 topK,
@@ -1316,7 +1503,7 @@ class MxbaiEdgeColbertIntegration {
                 const t_convert_done = performance.now();
 
                 // JavaScript profiling
-                console.log('⏱️ JavaScript (FastPlaid) Profiling:');
+                console.log(`⏱️ JavaScript (${modeName}) Profiling:`);
                 console.log(`   JS Preparation:  ${(t_prep_done - t_prep).toFixed(2)}ms`);
                 console.log(`   WASM Call:       ${(t_wasm_done - t_wasm_call).toFixed(2)}ms (includes WASM execution)`);
                 console.log(`   JSON Parse:      ${(t_parse_done - t_parse).toFixed(2)}ms`);
@@ -1436,10 +1623,13 @@ class MxbaiEdgeColbertIntegration {
 
         // Determine actual method used (accounting for fallbacks)
         let actualMethod;
+        const useQuantization = window.useQuantization || false;
         if (useFastPlaid && results._usedFallback) {
             actualMethod = 'Direct MaxSim (FastPlaid fallback)';
+        } else if (useFastPlaid && useQuantization) {
+            actualMethod = 'FastPlaid Quantized (4-bit)';
         } else if (useFastPlaid) {
-            actualMethod = 'FastPlaid';
+            actualMethod = 'FastPlaid Uncompressed (f32)';
         } else {
             actualMethod = 'Direct MaxSim';
         }
@@ -1611,18 +1801,18 @@ class MxbaiEdgeColbertIntegration {
             console.log(`📊 Available files: ${availableFiles.length}/${this.requiredFiles.length}`);
 
             if (availableFiles.length < this.requiredFiles.length) {
-                console.warn('⚠️ mxbai model missing required files, using working model instead');
-                // Use the working model from test
-                await this.loadSingleModel('lightonai/answerai-colbert-small-v1');
-                this.modelRepo = 'lightonai/answerai-colbert-small-v1';
-            } else {
-                // Try to load mxbai model
-                await this.loadSingleModel(modelRepo);
-                this.modelRepo = modelRepo;
+                throw new Error(`mxbai-edge-colbert-v0-17m missing required files. Available: ${availableFiles.length}/${this.requiredFiles.length}`);
             }
+
+            // Load mxbai model (no fallback)
+            await this.loadSingleModel(modelRepo);
+            this.modelRepo = modelRepo;
 
             this.simulationMode = false;
             console.log(`🎉 Model loaded successfully: ${this.modelRepo}`);
+            console.log(`📊 Model config dimension: 48 (2_Dense output)`);
+            console.log(`📊 Actual pylate-rs dimension: 512 (1_Dense output only)`);
+            console.log(`⚠️ Note: pylate-rs doesn't support 2_Dense layer`);
             return true;
         } catch (error) {
             console.error('❌ Model loading failed:', error);

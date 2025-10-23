@@ -18,6 +18,12 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', '*')
         self.send_header('Access-Control-Expose-Headers', '*')
         
+        # Prevent caching of WASM files during development
+        if self.path.endswith('.wasm') or self.path.endswith('.js'):
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
+        
         # Less restrictive COEP/COOP for development
         # Comment out the strict policies that are blocking Hugging Face
         # self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
@@ -34,13 +40,17 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    # Parse arguments
+    port = 8000
+    simple_mode = '--simple' in sys.argv
+    
+    # Extract port number from arguments
+    for arg in sys.argv[1:]:
+        if arg.isdigit():
+            port = int(arg)
     
     # Change to demo directory
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    
-    # Check if --simple flag is provided for basic CORS
-    simple_mode = '--simple' in sys.argv
     
     if simple_mode:
         print("🔧 Running in simple mode (basic CORS, no COEP)")

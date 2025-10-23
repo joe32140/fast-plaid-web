@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pre-compute Index for 1000 Papers</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        button {
+            background: #1976d2;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        button:disabled {
+            background: #ccc;
+        }
+        .log {
+            background: #263238;
+            color: #aed581;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .error { color: #ff5252; }
+        .success { color: #69f0ae; }
+        .info { color: #64b5f6; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Pre-compute Index for 1000 Papers</h1>
+    <p>This tool pre-computes embeddings and creates a quantized FastPlaid index for 1000 arXiv papers.</p>
+
+    <div class="container">
+        <button id="computeBtn">🚀 Start Pre-computation</button>
+        <button id="downloadBtn" disabled>💾 Download Index</button>
+    </div>
+
+    <div class="container">
+        <h3>📊 Progress</h3>
+        <div id="log" class="log"></div>
+    </div>
+
+    <script type="module">
+        import init, { FastPlaidQuantized } from './pkg/fast_plaid_rust.js';
+
+        const log = document.getElementById('log');
+        const computeBtn = document.getElementById('computeBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        let precomputedIndex = null;
+
+        function addLog(message, type = 'info') {
+            const line = document.createElement('div');
+            line.className = type;
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            log.appendChild(line);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        computeBtn.addEventListener('click', async () => {
+            try {
+                computeBtn.disabled = true;
+                addLog('🔄 Initializing WASM...', 'info');
+
+                await init();
+                addLog('✅ WASM initialized', 'success');
+
+                // Load papers
+                addLog('📄 Loading 1000 papers from ../data/papers_1000.json...', 'info');
+                const response = await fetch('../data/papers_1000.json');
+                const papers = await response.json();
+                addLog(`✅ Loaded ${papers.length} papers`, 'success');
+
+                // Load mxbai model
+                addLog('🤖 Loading mxbai-edge-colbert model...', 'info');
+                const { MxbaiEdgeColbertIntegration } = await import('./mxbai-integration.js');
+                const model = new MxbaiEdgeColbertIntegration();
+                await model.initializeModel();
+                addLog(`✅ Model loaded (dim: ${model.embeddingDim})`, 'success');
+
+                // Compute embeddings
+                addLog('🧮 Computing embeddings...', 'info');
+                const startTime = Date.now();
+                const embeddings = [];
+
+                for (let i = 0; i < papers.length; i++) {
+                    const paper = papers[i];
+                    const text = `${paper.title} ${paper.abstract}`;
+
+                    const result = await model.encode([text]);
+                    embeddings.push({
+                        data: result.data,
+                        numTokens: result.numTokens[0]
+                    });
+
+                    if ((i + 1) % 50 === 0 || i === papers.length - 1) {
+                        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                        const rate = ((i + 1) / (Date.now() - startTime) * 1000).toFixed(2);
+                        addLog(`  Progress: ${i + 1}/${papers.length} (${rate} papers/sec)`, 'info');
+                    }
+                }
+
+                const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
+                addLog(`✅ Embeddings computed in ${totalTime}s`, 'success');
+
+                // Create quantized index
+                addLog('🗜️ Creating 4-bit quantized index...', 'info');
+                const indexStart = Date.now();
+
+                const fastPlaid = new FastPlaidQuantized();
+
+                // Flatten embeddings
+                const flatEmbeddings = new Float32Array(
+                    embeddings.reduce((acc, e) => acc.concat(Array.from(e.data)), [])
+                );
+
+                const numTokensArray = new Uint32Array(embeddings.map(e => e.numTokens));
+
+                // Add documents
+                for (let i = 0; i < papers.length; i++) {
+                    const offset = numTokensArray.slice(0, i).reduce((a, b) => a + b, 0);
+                    const length = numTokensArray[i];
+                    const docEmbedding = flatEmbeddings.slice(
+                        offset * model.embeddingDim,
+                        (offset + length) * model.embeddingDim
+                    );
+
+                    fastPlaid.add_document(i, docEmbedding, length);
+                }
+
+                const indexTime = ((Date.now() - indexStart) / 1000).toFixed(2);
+                addLog(`✅ Index created in ${indexTime}s`, 'success');
+
+                // Prepare download data
+                precomputedIndex = {
+                    papers: papers,
+                    embeddings: embeddings.map(e => ({
+                        data: Array.from(e.data),
+                        numTokens: e.numTokens
+                    })),
+                    metadata: {
+                        model: 'mixedbread-ai/mxbai-edge-colbert-v0-17m',
+                        embeddingDim: model.embeddingDim,
+                        numPapers: papers.length,
+                        computedAt: new Date().toISOString(),
+                        totalComputeTime: totalTime,
+                        indexBuildTime: indexTime
+                    }
+                };
+
+                const sizeBytes = JSON.stringify(precomputedIndex).length;
+                const sizeMB = (sizeBytes / 1024 / 1024).toFixed(2);
+                addLog(`📊 Index size: ${sizeMB} MB (uncompressed JSON)`, 'info');
+                addLog('✅ Ready to download!', 'success');
+
+                downloadBtn.disabled = false;
+
+            } catch (error) {
+                addLog(`❌ Error: ${error.message}`, 'error');
+                console.error(error);
+                computeBtn.disabled = false;
+            }
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            const blob = new Blob([JSON.stringify(precomputedIndex, null, 2)], {
+                type: 'application/json'
+            });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'precomputed_index_1000.json';
+            a.click();
+            URL.revokeObjectURL(url);
+            addLog('💾 Download started!', 'success');
+        });
+    </script>
+</body>
+</html>

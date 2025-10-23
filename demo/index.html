@@ -1,575 +1,900 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="utf-8">
-    <title>FastPlaid WASM Demo - mxbai-edge-colbert</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastPlaid Demo - ColBERT Search with 4-bit Quantization (1000 Papers)</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
             padding: 20px;
         }
+
         .container {
-            background: #f5f5f5;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 36px;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
+        .stats-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 15px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
             padding: 20px;
             border-radius: 8px;
-            margin: 10px 0;
+            text-align: center;
         }
-        .error {
-            background: #ffebee;
-            color: #c62828;
-            padding: 10px;
-            border-radius: 4px;
-            margin: 10px 0;
+
+        .stat-card.green {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         }
-        .success {
-            background: #e8f5e8;
-            color: #2e7d32;
-            padding: 10px;
-            border-radius: 4px;
-            margin: 10px 0;
+
+        .stat-card.orange {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
         }
-        button {
-            background: #1976d2;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            margin: 5px;
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 5px;
         }
-        button:hover {
-            background: #1565c0;
+
+        .stat-label {
+            font-size: 14px;
+            opacity: 0.9;
         }
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-        textarea {
-            width: 100%;
-            height: 100px;
-            margin: 10px 0;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        .results {
+
+        .search-panel {
             background: white;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            padding: 15px;
-            margin: 10px 0;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
         }
+
+        .search-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        #queryInput {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        #queryInput:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .comparison-panel {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .method-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .method-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .method-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .method-time {
+            font-size: 18px;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: 20px;
+            background: #f0f0f0;
+        }
+
+        .method-time.fast {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .method-time.slow {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .method-description {
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-size: 13px;
+        }
+
         .result-item {
             padding: 15px;
-            border-bottom: 1px solid #eee;
             margin-bottom: 10px;
+            border-radius: 8px;
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
         }
-        .result-item:last-child {
-            border-bottom: none;
+
+        .result-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
         }
-        .score {
-            font-weight: bold;
-            color: #1976d2;
-        }
-        .content-preview {
+
+        .result-score {
+            font-size: 14px;
             color: #666;
-            font-size: 0.9em;
-            margin-top: 8px;
+            margin-bottom: 5px;
+        }
+
+        .result-abstract {
+            font-size: 14px;
+            color: #777;
             line-height: 1.4;
         }
-        .timing-info {
-            background: #f0f0f0;
-            padding: 10px;
-            border-radius: 4px;
-            margin: 10px 0;
-            font-family: monospace;
-            font-size: 0.9em;
+
+        .status-message {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
         }
-        .stats-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
+
+        .status-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
         }
-        .stats-table th, .stats-table td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: left;
+
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
         }
-        .stats-table th {
-            background-color: #f2f2f2;
+
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        @media (max-width: 768px) {
+            .comparison-panel {
+                grid-template-columns: 1fr;
+            }
+
+            .search-controls {
+                flex-direction: column;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
-    <h1>FastPlaid WASM Demo</h1>
-    <p>Semantic search with <strong>mixedbread-ai/mxbai-edge-colbert-v0-17m</strong> + FastPlaid</p>
-
     <div class="container">
-        <h3>1. Initialize FastPlaid</h3>
-        <button id="initBtn">Initialize WASM Module</button>
-        <div id="initStatus"></div>
-    </div>
-
-    <div class="container">
-        <h3>2. Select Model & Create Index</h3>
-        <p>Choose a ColBERT model and create document index:</p>
-        <button id="loadMxbaiBtn" disabled style="background: #9c27b0; color: white;">🎯 mixedbread-ai/mxbai-edge-colbert-v0-17m</button>
-        <button id="loadColbertBtn" disabled style="background: #ff9800;">🚀 lightonai/answerai-colbert-small-v1</button>
-        <div style="font-size: 0.9em; color: #666; margin-top: 10px;">
-            <strong>Model IDs:</strong><br>
-            • <code>mixedbread-ai/mxbai-edge-colbert-v0-17m</code> - 17M parameters, edge-optimized<br>
-            • <code>lightonai/answerai-colbert-small-v1</code> - Small ColBERT model, proven working
+        <div class="header">
+            <h1>🆚 Direct MaxSim vs FastPlaid</h1>
+            <p>Search 1000 arXiv Papers: Float32 vs 4-bit Quantized ColBERT</p>
         </div>
-        <div id="indexStatus"></div>
-    </div>
 
-    <div class="container">
-        <h3>3. Search</h3>
-        <p>Enter your search query:</p>
-        <textarea id="queryInput" placeholder="Enter your search query here...">machine learning algorithms</textarea>
-        <br>
-        <label>Top K results: <input type="number" id="topK" value="5" min="1" max="20"></label>
-        <br>
-        <label><input type="checkbox" id="useFastPlaid" checked> Use FastPlaid (uncheck for direct MaxSim)</label>
-        <br>
-        <button id="searchBtn" disabled>Search</button>
-        <button id="resetStatsBtn" disabled style="background: #ff9800;">Reset Performance Stats</button>
-        <div id="searchStatus"></div>
-    </div>
+        <!-- Stats Panel -->
+        <div class="stats-panel">
+            <h2 style="margin-bottom: 15px;">📊 Index Statistics</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="numPapers">-</div>
+                    <div class="stat-label">Research Papers</div>
+                </div>
+                <div class="stat-card orange">
+                    <div class="stat-value" id="directSize">-</div>
+                    <div class="stat-label">Direct MaxSim (float32)</div>
+                </div>
+                <div class="stat-card green">
+                    <div class="stat-value" id="fastplaidSize">-</div>
+                    <div class="stat-label">FastPlaid (4-bit)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="compression">-</div>
+                    <div class="stat-label">Size Reduction</div>
+                </div>
+            </div>
+            <div id="statusMessage" style="margin-top: 20px;"></div>
+        </div>
 
-    <div class="container">
-        <h3>4. Results</h3>
-        <div id="results"></div>
-    </div>
+        <!-- Search Panel -->
+        <div class="search-panel">
+            <h2 style="margin-bottom: 15px;">🔍 Search Research Papers</h2>
+            <div class="search-controls">
+                <input type="text" id="queryInput" placeholder="Enter your search query (e.g., 'machine learning for NLP')" />
+                <button class="btn btn-primary" id="searchBtn">Search Both</button>
+            </div>
+        </div>
 
-    <div class="container">
-        <h3>5. Performance Statistics</h3>
-        <div id="performanceStats"></div>
-    </div>
+        <!-- Comparison Panel -->
+        <div class="comparison-panel" id="comparisonPanel" style="display: none;">
+            <!-- Direct MaxSim Results -->
+            <div class="method-panel">
+                <div class="method-header">
+                    <div class="method-title">🐢 Direct MaxSim</div>
+                    <div class="method-time" id="directTime">- ms</div>
+                </div>
+                <div class="method-description">
+                    <strong>Float32 embeddings</strong><br>
+                    Full precision, searches all 1000 papers
+                </div>
+                <div id="directResults"></div>
+            </div>
 
-    <div class="container">
-        <h3>Technical Details</h3>
-        <p><strong>Model:</strong> mixedbread-ai/mxbai-edge-colbert-v0-17m (17M parameters)</p>
-        <p><strong>Embedding Dimension:</strong> 384 (optimized for edge deployment)</p>
-        <p><strong>Document Count:</strong> 100 documents (ML, ColBERT, pylate, mixedbread + fun content)</p>
-        <p><strong>Search Methods:</strong> FastPlaid indexing OR Direct MaxSim computation</p>
-        <p><strong>Runtime:</strong> Pure WASM (no server calls)</p>
-        <p><strong>Search Algorithm:</strong> ColBERT MaxSim scoring with token-level embeddings</p>
-        <p><strong>Pipeline:</strong> Text → mxbai-edge-colbert → Token Embeddings → Search → Ranked Results</p>
-        <p><strong>Performance Tracking:</strong> Model encoding, query encoding, search time breakdown</p>
-        <p><strong>Status:</strong> <span id="techStatus">Demo mode with simulated embeddings</span></p>
-        <p><strong>Embeddings:</strong> <span id="embeddingStatus">🎭 Simulated (no model loaded)</span></p>
-        <p><strong>Debug:</strong> <a href="test-pylate.html" target="_blank">Test pylate-rs Integration</a></p>
+            <!-- FastPlaid Results -->
+            <div class="method-panel">
+                <div class="method-header">
+                    <div class="method-title">⚡ FastPlaid</div>
+                    <div class="method-time" id="fastplaidTime">- ms</div>
+                </div>
+                <div class="method-description">
+                    <strong>4-bit quantized + IVF</strong> (Rust WASM)<br>
+                    8x smaller, <span id="clustersProbed">~6</span> clusters → <span id="candidatesCount">~300</span> candidates
+                </div>
+                <div id="fastplaidResults"></div>
+            </div>
+        </div>
     </div>
 
     <script type="module">
-        // Import our integration and WASM modules
-        import init, { FastPlaidWasm } from './pkg/fast_plaid_rust.js?v=8';
+        import init, { FastPlaidQuantized } from './pkg/fast_plaid_rust.js';
+        import { PrecomputedIndexLoader } from './precomputed-index-loader.js';
 
-        let fastPlaid = null;
-        let mxbaiIntegration = null;
-        let documentIndex = null;
-        let wasmInitialized = false;
+        let indexLoader = null;
+        let directEmbeddings = null;
+        let fastPlaidWasm = null;  // WASM instance
+        let papers = null;
+        let colbertModel = null;
 
-        // Load the integration module
-        async function loadIntegration() {
-            await import('./mxbai-integration.js');
-            // The class is now available on window.MxbaiEdgeColbertIntegration
-        }
-
-        // Initialize everything
-        async function initializeApp() {
-            await loadIntegration();
-            setupEventListeners();
-        }
-
-        // Set up all event listeners after modules are loaded
-        function setupEventListeners() {
-
-        // DOM elements
-        const initBtn = document.getElementById('initBtn');
-        const loadMxbaiBtn = document.getElementById('loadMxbaiBtn');
-        const loadColbertBtn = document.getElementById('loadColbertBtn');
-        const searchBtn = document.getElementById('searchBtn');
-        const resetStatsBtn = document.getElementById('resetStatsBtn');
-        const initStatus = document.getElementById('initStatus');
-        const indexStatus = document.getElementById('indexStatus');
-        const searchStatus = document.getElementById('searchStatus');
-        const results = document.getElementById('results');
-        const queryInput = document.getElementById('queryInput');
-        const topKInput = document.getElementById('topK');
-        const useFastPlaidInput = document.getElementById('useFastPlaid');
-        const performanceStats = document.getElementById('performanceStats');
-
-        // Utility functions
-        function showError(element, message) {
-            element.innerHTML = `<div class="error">Error: ${message}</div>`;
-        }
-
-        function showSuccess(element, message) {
-            element.innerHTML = `<div class="success">${message}</div>`;
-        }
-
-        function showStatus(element, message) {
-            element.innerHTML = `<div>${message}</div>`;
-        }
-
-        // Initialize WASM and mxbai-edge-colbert
-        initBtn.addEventListener('click', async () => {
-            try {
-                initStatus.innerHTML = '<div>Initializing WASM module and mxbai-edge-colbert...</div>';
-                
-                // Initialize WASM
-                await init();
-                fastPlaid = new FastPlaidWasm();
-                
-                // Make FastPlaid available globally for the integration
-                window.fastPlaid = fastPlaid;
-                
-                // Initialize mxbai-edge-colbert integration
-                mxbaiIntegration = new MxbaiEdgeColbertIntegration();
-                await mxbaiIntegration.initializeModel();
-                
-                wasmInitialized = true;
-                
-                // Update technical status with detailed information
-                const modelStatus = mxbaiIntegration.getModelStatus();
-                const techStatus = document.getElementById('techStatus');
-                if (techStatus) {
-                    let statusText = '';
-                    if (modelStatus.hasRealModel) {
-                        statusText = `🚀 Real ${modelStatus.modelRepo} loaded via pylate-rs`;
-                    } else if (modelStatus.pylateLoaded) {
-                        statusText = `🎭 pylate-rs loaded, but model failed - using simulation`;
-                    } else {
-                        statusText = `❌ pylate-rs failed to load - using simulation`;
-                    }
-                    techStatus.textContent = statusText;
-                }
-                
-                // Log detailed status for debugging
-                console.log('🔍 Model Status:', modelStatus);
-                
-                showSuccess(initStatus, 'WASM module and mxbai-edge-colbert initialized successfully!');
-                loadMxbaiBtn.disabled = false;
-                loadColbertBtn.disabled = false;
-                
-            } catch (error) {
-                showError(initStatus, `Failed to initialize: ${error.message}`);
-                console.error('Initialization error:', error);
+        // Expose to window for console access (to save index)
+        window.fastPlaidWasm = null;
+        window.saveFastPlaidIndex = () => {
+            if (!window.fastPlaidWasm) {
+                console.error('❌ FastPlaid not loaded yet!');
+                return;
             }
-        });
+            const indexBytes = window.fastPlaidWasm.save_index();
+            const blob = new Blob([indexBytes], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'index.fastplaid';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            console.log('✅ Downloaded index.fastplaid! Move to demo/data/');
+        };
 
-        // Load mxbai model and create index
-        loadMxbaiBtn.addEventListener('click', async () => {
-            await loadModelAndCreateIndex('mixedbread-ai/mxbai-edge-colbert-v0-17m', '🎯 mxbai-edge-colbert');
-        });
+        // Loading state management for both indexes
+        const loadingState = {
+            directMaxSim: { loaded: false, loading: false, error: null },
+            fastPlaid: { loaded: false, loading: false, error: null },
+            colbert: { loaded: false, loading: false, error: null }
+        };
 
-        // Load colbert-small model and create index
-        loadColbertBtn.addEventListener('click', async () => {
-            await loadModelAndCreateIndex('lightonai/answerai-colbert-small-v1', '🚀 answerai-colbert-small');
-        });
+        // Update UI to show loading state
+        function updateLoadingUI(customMessage = null) {
+            const directSize = document.getElementById('directSize');
+            const fastplaidSize = document.getElementById('fastplaidSize');
 
-        // Common function to load model and create index
-        async function loadModelAndCreateIndex(modelId, displayName) {
-            try {
-                const indexStartTime = performance.now();
-                indexStatus.innerHTML = `<div>Loading ${displayName} and creating document index...</div>`;
-                
-                // Load the specific model
-                await mxbaiIntegration.loadSpecificModel(modelId);
-                
-                // Update technical status
-                const modelStatus = mxbaiIntegration.getModelStatus();
-                const techStatus = document.getElementById('techStatus');
-                if (techStatus) {
-                    let statusText = '';
-                    if (modelStatus.hasRealModel) {
-                        statusText = `🚀 Real ${modelStatus.modelRepo} loaded via pylate-rs`;
-                    } else if (modelStatus.pylateLoaded) {
-                        statusText = `🎭 pylate-rs loaded, but model failed - using simulation`;
-                    } else {
-                        statusText = `❌ pylate-rs failed to load - using simulation`;
-                    }
-                    techStatus.textContent = statusText;
-                }
-                
-                // Create sample documents and encode them
-                const documents = mxbaiIntegration.createSampleDocuments();
-                documentIndex = await mxbaiIntegration.createDocumentIndex(documents);
+            // Direct MaxSim size box
+            if (loadingState.directMaxSim.loading) {
+                directSize.innerHTML = '<span style="font-size:20px;">⏳</span> Loading...';
+            } else if (loadingState.directMaxSim.error) {
+                directSize.innerHTML = '<span style="font-size:20px;">❌</span> Error';
+            } else if (loadingState.directMaxSim.loaded) {
+                directSize.textContent = '49.5 MB';
+            } else {
+                directSize.textContent = '-';
+            }
 
-                // Load document embeddings into FastPlaid WASM
+            // FastPlaid size box (with custom message support)
+            if (customMessage) {
+                fastplaidSize.innerHTML = `<span style="font-size:20px;">🔧</span> ${customMessage}`;
+            } else if (loadingState.fastPlaid.loading) {
+                fastplaidSize.innerHTML = '<span style="font-size:20px;">⏳</span> Loading...';
+            } else if (loadingState.fastPlaid.error) {
+                fastplaidSize.innerHTML = '<span style="font-size:20px;">❌</span> Error';
+            } else if (loadingState.fastPlaid.loaded) {
+                fastplaidSize.textContent = '6.2 MB';
+            } else {
+                fastplaidSize.textContent = '-';
+            }
+
+            // Update compression ratio if both loaded
+            if (loadingState.directMaxSim.loaded && loadingState.fastPlaid.loaded) {
+                document.getElementById('compression').textContent = '8.0x';
+            } else {
+                document.getElementById('compression').textContent = '-';
+            }
+        }
+
+        // Helper function to retry WASM operations
+        async function retryAsync(fn, maxRetries = 3, delayMs = 500) {
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
-                    await mxbaiIntegration.createFastPlaidIndex(documentIndex);
-                    console.log('✅ FastPlaid index created successfully');
+                    return await fn();
                 } catch (error) {
-                    console.warn('⚠️ Failed to create FastPlaid index:', error);
-                    // Continue - will fall back to Direct MaxSim
+                    console.warn(`Attempt ${attempt}/${maxRetries} failed:`, error.message);
+
+                    if (attempt === maxRetries) {
+                        throw error;
+                    }
+
+                    // Exponential backoff
+                    const delay = delayMs * Math.pow(2, attempt - 1);
+                    console.log(`Retrying in ${delay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+
+                    // Force garbage collection if possible
+                    if (window.gc) {
+                        window.gc();
+                    }
                 }
-                
-                const indexTime = performance.now() - indexStartTime;
-                const realCount = documentIndex.filter(doc => doc.isReal).length;
-                
-                showSuccess(indexStatus, 
-                    `✅ ${displayName} loaded! ${documents.length} documents indexed (${realCount} real embeddings) in ${indexTime.toFixed(2)}ms`
-                );
-                searchBtn.disabled = false;
-                resetStatsBtn.disabled = false;
-                
-            } catch (error) {
-                showError(indexStatus, `Failed to load ${displayName}: ${error.message}`);
-                console.error('Model loading error:', error);
             }
         }
 
-        // Search using mxbai-edge-colbert + FastPlaid or Direct MaxSim
-        searchBtn.addEventListener('click', async () => {
+        // Load Direct MaxSim embeddings (async, independent)
+        async function loadDirectMaxSimIndex() {
+            loadingState.directMaxSim.loading = true;
+            updateLoadingUI();
+
             try {
-                const query = queryInput.value.trim();
-                if (!query) {
-                    showError(searchStatus, 'Please enter a search query');
-                    return;
+                console.log('📥 Loading Direct MaxSim embeddings...');
+                showStatus('Loading Direct MaxSim embeddings...', 'info');
+
+                const directData = await indexLoader.loadDirectMaxSimEmbeddings();
+                directEmbeddings = directData.embeddings;
+
+                loadingState.directMaxSim.loaded = true;
+                loadingState.directMaxSim.loading = false;
+                updateLoadingUI();
+
+                console.log('✅ Direct MaxSim embeddings loaded!');
+                updateOverallStatus();
+            } catch (error) {
+                console.error('❌ Error loading Direct MaxSim:', error);
+                loadingState.directMaxSim.error = error.message;
+                loadingState.directMaxSim.loading = false;
+                updateLoadingUI();
+                updateOverallStatus();
+            }
+        }
+
+        // Load FastPlaid index (async, independent)
+        async function loadFastPlaidIndex() {
+            loadingState.fastPlaid.loading = true;
+            updateLoadingUI();
+
+            try {
+                console.log('📥 Loading FastPlaid index...');
+
+                // Initialize WASM if not already done
+                await retryAsync(async () => {
+                    await init();
+                    console.log('✅ WASM initialized');
+                }, 3, 500);
+
+                // Try to load precomputed .fastplaid index first (FAST!)
+                try {
+                    console.log('🔍 Checking for precomputed index.fastplaid...');
+                    const indexResponse = await fetch('./data/index.fastplaid');
+
+                    if (indexResponse.ok) {
+                        console.log('📦 Loading precomputed .fastplaid index from disk...');
+                        showStatus('💾 Loading FastPlaid from precomputed index...', 'info');
+                        updateLoadingUI('Loading...');
+
+                        const startTime = performance.now();
+                        const indexBytes = await indexResponse.arrayBuffer();
+
+                        fastPlaidWasm = new FastPlaidQuantized();
+                        window.fastPlaidWasm = fastPlaidWasm;  // Expose to console
+                        fastPlaidWasm.load_index(new Uint8Array(indexBytes));
+
+                        const loadTime = ((performance.now() - startTime) / 1000).toFixed(2);
+                        console.log(`✅ FastPlaid loaded from disk in ${loadTime}s!`);
+
+                        loadingState.fastPlaid.loaded = true;
+                        loadingState.fastPlaid.loading = false;
+                        updateLoadingUI();
+                        updateOverallStatus();
+                        return; // Success - exit early!
+                    }
+                } catch (e) {
+                    console.log('⚠️ Precomputed index not found, will build from embeddings');
                 }
 
-                const topK = parseInt(topKInput.value) || 5;
-                const useFastPlaid = useFastPlaidInput.checked;
+                // Fallback: Build from embeddings (SLOW but works)
+                console.log('🔨 Building FastPlaid index from embeddings...');
 
-                const requestedMethod = useFastPlaid ? 'FastPlaid' : 'Direct MaxSim';
-                searchStatus.innerHTML = `<div>Encoding query with mxbai-edge-colbert and searching using ${requestedMethod}...</div>`;
-                results.innerHTML = '';
+                // Wait for Direct MaxSim to load first (we need the embeddings)
+                console.log('⏳ Waiting for Direct MaxSim embeddings to load...');
+                showStatus('⏳ Waiting for embeddings to load...', 'info');
 
-                if (documentIndex && mxbaiIntegration) {
-                    // Use real mxbai-edge-colbert integration
-                    const searchResult = await mxbaiIntegration.searchDocuments(
-                        query,
-                        documentIndex,
-                        topK,
-                        useFastPlaid
+                while (!loadingState.directMaxSim.loaded && !loadingState.directMaxSim.error) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+
+                if (loadingState.directMaxSim.error) {
+                    throw new Error('Cannot build FastPlaid: Direct MaxSim embeddings failed to load');
+                }
+
+                console.log('✅ Embeddings ready, now quantizing to 4-bit + building IVF index...');
+                showStatus('🔧 Quantizing to 4-bit + building IVF clusters in WASM (10-15s)...', 'info');
+                updateLoadingUI('Building...');
+
+                // Create WASM instance and build quantized index
+                const startTime = performance.now();
+                await retryAsync(async () => {
+                    fastPlaidWasm = new FastPlaidQuantized();
+                    window.fastPlaidWasm = fastPlaidWasm;  // Expose to console
+
+                    // Prepare embeddings and doc_info for WASM
+                    const flatEmbeddings = new Float32Array(
+                        directEmbeddings.flatMap(doc => Array.from(doc.embedding))
+                    );
+                    const docInfo = new BigInt64Array(
+                        directEmbeddings.flatMap((doc, idx) => [BigInt(idx), BigInt(doc.numTokens)])
                     );
 
-                    const searchResults = searchResult.results;
-                    const timings = searchResult.timings;
+                    // Let WASM quantize (256 centroids) and build IVF index
+                    await fastPlaidWasm.load_documents_quantized(flatEmbeddings, docInfo, 256);
+                }, 3, 1000);
 
-                    // Update embedding status
-                    const embeddingStatus = document.getElementById('embeddingStatus');
-                    const realResults = searchResults.filter(r => r.isReal).length;
-                    if (embeddingStatus) {
-                        if (realResults > 0) {
-                            embeddingStatus.innerHTML = `🚀 Real ColBERT embeddings (${realResults}/${searchResults.length} results)`;
-                        } else {
-                            embeddingStatus.innerHTML = `🎭 Simulated embeddings (model failed)`;
-                        }
-                    }
+                const buildTime = ((performance.now() - startTime) / 1000).toFixed(1);
+                console.log(`✅ FastPlaid index built in ${buildTime}s (4-bit quantization + IVF clustering)`);
 
-                    // Use the actual method from timings (accounts for fallbacks)
-                    const actualMethod = timings.method || requestedMethod;
-                    showSuccess(searchStatus, `Found ${searchResults.length} results using mxbai-edge-colbert + ${actualMethod}`);
-                    displayMxbaiResults(searchResults, query, timings);
-                    updatePerformanceStats();
-                } else {
-                    // Fallback to demo results
-                    const embeddingStatus = document.getElementById('embeddingStatus');
-                    if (embeddingStatus) {
-                        embeddingStatus.innerHTML = `🎭 Demo mode (no index loaded)`;
-                    }
-                    showStatus(searchStatus, 'Search demo - showing sample results');
-                    displayDemoResults(query, topK);
-                }
-                
+                loadingState.fastPlaid.loaded = true;
+                loadingState.fastPlaid.loading = false;
+                updateLoadingUI();
+
+                updateOverallStatus();
             } catch (error) {
-                showError(searchStatus, `Search failed: ${error.message}`);
-                console.error('Search error:', error);
+                console.error('❌ Error loading FastPlaid:', error);
+                loadingState.fastPlaid.error = error.message;
+                loadingState.fastPlaid.loading = false;
+                updateLoadingUI();
+
+                let helpText = '';
+                if (error.message.includes('Table.grow') || error.message.includes('Memory')) {
+                    helpText = '<br><br>💡 This is a WASM memory issue. Try:<br>' +
+                               '• Refreshing the page (Ctrl+Shift+R)<br>' +
+                               '• Closing other tabs to free memory<br>' +
+                               '• Using a browser with more WASM support (Chrome/Edge)';
+                } else if (error.message.includes('fetch') || error.message.includes('network')) {
+                    helpText = '<br><br>💡 Network issue. Make sure embeddings.bin loaded successfully.';
+                }
+                showStatus(`❌ FastPlaid Error: ${error.message}${helpText}`, 'error');
+                updateOverallStatus();
+            }
+        }
+
+        // Load ColBERT model for query encoding
+        async function loadColBertModel() {
+            loadingState.colbert.loading = true;
+
+            try {
+                console.log('🤖 Loading ColBERT model...');
+                showStatus('Loading ColBERT model for query encoding...', 'info');
+
+                // Load mxbai-integration.js if not already loaded
+                if (!window.MxbaiEdgeColbertIntegration) {
+                    await new Promise((resolve, reject) => {
+                        const script = document.createElement('script');
+                        script.src = './mxbai-integration.js';
+                        script.onload = resolve;
+                        script.onerror = reject;
+                        document.head.appendChild(script);
+                    });
+                }
+
+                colbertModel = new window.MxbaiEdgeColbertIntegration();
+                await colbertModel.initializeModel();
+
+                loadingState.colbert.loaded = true;
+                loadingState.colbert.loading = false;
+
+                console.log('✅ ColBERT model loaded!');
+                updateOverallStatus();
+            } catch (error) {
+                console.error('❌ Error loading ColBERT:', error);
+                loadingState.colbert.error = error.message;
+                loadingState.colbert.loading = false;
+                showStatus(`❌ ColBERT Error: ${error.message}`, 'error');
+                updateOverallStatus();
+            }
+        }
+
+        // Update overall status message
+        function updateOverallStatus() {
+            const direct = loadingState.directMaxSim;
+            const fastplaid = loadingState.fastPlaid;
+            const colbert = loadingState.colbert;
+
+            // Count loaded, loading, errored
+            const loaded = [direct.loaded, fastplaid.loaded, colbert.loaded].filter(Boolean).length;
+            const loading = [direct.loading, fastplaid.loading, colbert.loading].filter(Boolean).length;
+            const errors = [direct.error, fastplaid.error, colbert.error].filter(Boolean).length;
+
+            if (loaded === 3) {
+                showStatus(`✅ All systems ready! Try: "transformer attention mechanisms"`, 'success');
+                document.getElementById('searchBtn').disabled = false;
+            } else if (errors > 0 && loading === 0) {
+                let msg = '⚠️ Partial system ready. ';
+                if (direct.loaded) msg += 'Direct MaxSim: ✅ ';
+                if (fastplaid.loaded) msg += 'FastPlaid: ✅ ';
+                if (colbert.loaded) msg += 'ColBERT: ✅';
+                showStatus(msg, 'info');
+
+                // Enable search if at least one index and colbert are ready
+                if (colbert.loaded && (direct.loaded || fastplaid.loaded)) {
+                    document.getElementById('searchBtn').disabled = false;
+                }
+            } else if (loading > 0) {
+                let msg = '⏳ Loading... ';
+                if (direct.loading) msg += 'Direct MaxSim... ';
+                if (fastplaid.loading) msg += 'FastPlaid... ';
+                if (colbert.loading) msg += 'ColBERT... ';
+                showStatus(msg, 'info');
+            }
+        }
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', async () => {
+            showStatus('Initializing...', 'info');
+            updateLoadingUI();
+
+            try {
+                indexLoader = new PrecomputedIndexLoader('./data/fastplaid_4bit');
+
+                // Load papers metadata first (required for display)
+                console.log('📂 Loading papers metadata...');
+                papers = await indexLoader.loadPapersMetadata();
+                document.getElementById('numPapers').textContent = papers.length;
+                console.log(`✅ Loaded ${papers.length} papers metadata`);
+
+                // Start loading all indexes in parallel (truly independent)
+                Promise.all([
+                    loadDirectMaxSimIndex(),
+                    loadFastPlaidIndex(),
+                    loadColBertModel()
+                ]).catch(err => {
+                    console.error('Unexpected error in parallel loading:', err);
+                });
+
+                // Attach event listeners
+                document.getElementById('searchBtn').addEventListener('click', performSearch);
+                document.getElementById('queryInput').addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter' && !document.getElementById('searchBtn').disabled) {
+                        performSearch();
+                    }
+                });
+
+            } catch (error) {
+                console.error('Critical initialization error:', error);
+                showStatus(`❌ Critical Error: ${error.message}`, 'error');
             }
         });
 
-        // Reset performance statistics
-        resetStatsBtn.addEventListener('click', () => {
-            if (mxbaiIntegration) {
-                mxbaiIntegration.resetPerformanceStats();
-                updatePerformanceStats();
-                showSuccess(document.getElementById('searchStatus'), 'Performance statistics reset');
+        // MaxSim scoring function
+        function maxSim(queryTokens, docTokens, numQueryTokens, numDocTokens, embeddingDim) {
+            let totalScore = 0;
+            for (let q = 0; q < numQueryTokens; q++) {
+                let maxScore = -Infinity;
+                for (let d = 0; d < numDocTokens; d++) {
+                    let dotProduct = 0;
+                    for (let i = 0; i < embeddingDim; i++) {
+                        dotProduct += queryTokens[q * embeddingDim + i] * docTokens[d * embeddingDim + i];
+                    }
+                    maxScore = Math.max(maxScore, dotProduct);
+                }
+                totalScore += maxScore;
             }
-        });
+            return totalScore;
+        }
 
-        function displayResults(searchResults, query) {
-            if (!searchResults || searchResults.length === 0) {
-                results.innerHTML = '<div>No results found.</div>';
+        // Direct MaxSim search
+        function searchDirectMaxSim(queryEmb, numQueryTokens, embeddingDim, topK) {
+            const scores = [];
+
+            for (let docId = 0; docId < directEmbeddings.length; docId++) {
+                const docEmb = directEmbeddings[docId];
+                const score = maxSim(queryEmb, docEmb.embedding, numQueryTokens, docEmb.numTokens, embeddingDim);
+                scores.push({ docId, score });
+            }
+
+            // Sort by score and return top-K
+            scores.sort((a, b) => b.score - a.score);
+            return scores.slice(0, topK).map(s => ({
+                paper: papers[s.docId],
+                score: s.score
+            }));
+        }
+
+        // FastPlaid search using WASM (4-bit quantized + IVF)
+        function searchFastPlaid(queryEmb, numQueryTokens, embeddingDim, topK) {
+            // WASM expects query_shape: [batch_size, seq_len, embedding_dim]
+            const queryShape = new Uint32Array([1, numQueryTokens, embeddingDim]);
+
+            // Use WASM's native search with IVF clustering
+            const wasmResultJson = fastPlaidWasm.search(queryEmb, queryShape, topK);
+
+            // Parse JSON result
+            const wasmResults = JSON.parse(wasmResultJson);
+            const firstResult = wasmResults[0]; // Get first query result (batch_size=1)
+
+            // Log IVF statistics
+            console.log(`⚡ IVF: Probed ${firstResult.num_clusters_probed} clusters, searched ${firstResult.candidates_searched}/${papers.length} papers`);
+
+            // Convert WASM result to our format
+            return {
+                results: firstResult.passage_ids.map((docId, idx) => ({
+                    paper: papers[docId],
+                    score: firstResult.scores[idx]
+                })),
+                candidatesSearched: firstResult.candidates_searched,
+                numClustersProbed: firstResult.num_clusters_probed
+            };
+        }
+
+        async function performSearch() {
+            const query = document.getElementById('queryInput').value.trim();
+            if (!query) {
+                alert('Please enter a search query');
                 return;
             }
 
-            let html = '<div class="results">';
-            searchResults.forEach((result, index) => {
-                html += `
-                    <div class="result-item">
-                        <div><strong>Result ${index + 1}</strong></div>
-                        <div>Document ID: ${result.passage_ids?.[0] || 'N/A'}</div>
-                        <div class="score">Score: ${result.scores?.[0]?.toFixed(4) || 'N/A'}</div>
-                    </div>
-                `;
-            });
-            html += '</div>';
-            results.innerHTML = html;
-        }
-
-        function displayMxbaiResults(searchResults, query, timings) {
-            let html = '<div class="results">';
-            html += `<div><strong>mxbai-edge-colbert Results for:</strong> "${query}"</div>`;
-            
-            // Display timing information
-            if (timings) {
-                html += `
-                    <div class="timing-info">
-                        <strong>⏱️ Performance Breakdown:</strong><br>
-                        Query Encoding: ${timings.queryEncoding.toFixed(2)}ms<br>
-                        Search Time (${timings.method}): ${timings.searchTime.toFixed(2)}ms<br>
-                        Total Time: ${timings.totalTime.toFixed(2)}ms
-                    </div>
-                `;
+            // Check if ColBERT is ready
+            if (!loadingState.colbert.loaded) {
+                showStatus('⏳ ColBERT model is still loading, please wait...', 'info');
+                return;
             }
-            
-            searchResults.forEach((result, index) => {
-                const statusIcon = result.isReal ? '🚀' : '🎭';
-                const statusText = result.isReal ? 'Real pylate-rs embeddings' : 'Simulated embeddings';
-                const contentPreview = result.content ? 
-                    (result.content.length > 200 ? result.content.substring(0, 200) + '...' : result.content) : 
-                    'No content available';
-                
-                html += `
-                    <div class="result-item">
-                        <div><strong>${result.title}</strong></div>
-                        <div>Document ID: ${result.id}</div>
-                        <div class="score">ColBERT MaxSim Score: ${result.score.toFixed(4)}</div>
-                        <div class="content-preview">${contentPreview}</div>
-                        <div style="font-size: 0.9em; color: #666; margin-top: 5px;">
-                            ${statusIcon} ${statusText} | Tokens: ${result.numTokens || 'N/A'}
-                            ${result.encodingTime ? ` | Encoding: ${result.encodingTime.toFixed(2)}ms` : ''}
-                        </div>
-                    </div>
-                `;
-            });
-            html += '</div>';
-            results.innerHTML = html;
-        }
 
-        function updatePerformanceStats() {
-            if (!mxbaiIntegration) return;
+            // Check if at least one index is ready
+            if (!loadingState.directMaxSim.loaded && !loadingState.fastPlaid.loaded) {
+                showStatus('⏳ Both indexes are still loading, please wait...', 'info');
+                return;
+            }
 
-            const stats = mxbaiIntegration.getPerformanceStats();
-            let html = '<table class="stats-table">';
-            html += '<tr><th>Metric</th><th>Count</th><th>Avg (ms)</th><th>Min (ms)</th><th>Max (ms)</th></tr>';
+            showStatus('Encoding query...', 'info');
+            document.getElementById('searchBtn').disabled = true;
 
-            const metrics = [
-                { name: 'Model Encoding', data: stats.modelEncoding },
-                { name: 'Query Encoding', data: stats.queryEncoding },
-                { name: 'Search Time', data: stats.searchTime },
-                { name: 'Total Search Time', data: stats.totalSearchTime },
-                { name: 'Index Creation', data: stats.indexTime }
-            ];
+            try {
+                // Encode query using ColBERT
+                const queryEncoded = await colbertModel.encodeText(query, true);
+                const queryEmb = queryEncoded.embeddings;
+                const numQueryTokens = queryEncoded.numTokens;
+                const embeddingDim = queryEncoded.tokenDim;
 
-            metrics.forEach(metric => {
-                html += `
-                    <tr>
-                        <td>${metric.name}</td>
-                        <td>${metric.data.count}</td>
-                        <td>${metric.data.avg}</td>
-                        <td>${metric.data.min}</td>
-                        <td>${metric.data.max}</td>
-                    </tr>
-                `;
-            });
+                console.log('🔍 Query:', query);
+                console.log('   Tokens:', numQueryTokens, 'Dim:', embeddingDim);
 
-            html += '</table>';
+                // Search with both methods (only if loaded)
+                showStatus('Searching...', 'info');
 
-            // Add memory comparison if available
-            if (stats.memory && stats.memory.fastPlaid.totalBytes > 0) {
-                html += '<h4 style="margin-top: 20px;">Index Memory Comparison</h4>';
-                html += '<table class="stats-table">';
-                html += '<tr><th>Method</th><th>Total Size</th><th>Embeddings</th><th>Metadata</th><th>Efficiency</th></tr>';
+                let directResults = null;
+                let directTime = null;
+                let fastplaidResult = null;
+                let fastplaidTime = null;
 
-                html += `
-                    <tr>
-                        <td><strong>FastPlaid (WASM)</strong></td>
-                        <td>${stats.memory.fastPlaid.total}</td>
-                        <td>${stats.memory.fastPlaid.embeddings}</td>
-                        <td>${stats.memory.fastPlaid.metadata}</td>
-                        <td style="color: #2e7d32; font-weight: bold;">
-                            ${stats.memory.savings ? `↓ ${stats.memory.savings.percent}% smaller` : 'Baseline'}
-                        </td>
-                    </tr>
-                    <tr>
-                        <td><strong>Direct MaxSim (JS)</strong></td>
-                        <td>${stats.memory.directMaxSim.total}</td>
-                        <td>${stats.memory.directMaxSim.embeddings}</td>
-                        <td>${stats.memory.directMaxSim.metadata}</td>
-                        <td style="color: #c62828;">
-                            ${stats.memory.savings ? `Baseline (uses ${stats.memory.directMaxSim.total})` : '-'}
-                        </td>
-                    </tr>
-                `;
-
-                if (stats.memory.savings) {
-                    html += `
-                        <tr style="background-color: #e8f5e8;">
-                            <td colspan="4"><strong>Memory Savings with FastPlaid:</strong></td>
-                            <td style="color: #2e7d32; font-weight: bold;">
-                                ${stats.memory.savings.absolute} (${stats.memory.savings.percent}%)
-                            </td>
-                        </tr>
-                    `;
+                // Direct MaxSim: Exhaustive search over all papers (if loaded)
+                if (loadingState.directMaxSim.loaded) {
+                    const directStart = performance.now();
+                    directResults = searchDirectMaxSim(queryEmb, numQueryTokens, embeddingDim, 10);
+                    directTime = performance.now() - directStart;
+                    console.log('✅ Direct MaxSim:', directResults.length, 'results in', directTime.toFixed(1), 'ms (all', papers.length, 'papers)');
+                } else {
+                    console.log('⏳ Direct MaxSim: Not loaded yet');
                 }
 
-                html += '</table>';
+                // FastPlaid: Using WASM's 4-bit quantized index with IVF clustering (if loaded)
+                if (loadingState.fastPlaid.loaded) {
+                    const fastplaidStart = performance.now();
+                    fastplaidResult = searchFastPlaid(queryEmb, numQueryTokens, embeddingDim, 10);
+                    fastplaidTime = performance.now() - fastplaidStart;
+                    console.log('✅ FastPlaid:', fastplaidResult.results.length, 'results in', fastplaidTime.toFixed(1), 'ms');
+                    console.log(`   🎯 IVF: ${fastplaidResult.numClustersProbed} clusters → ${fastplaidResult.candidatesSearched} candidates (${(fastplaidResult.candidatesSearched / papers.length * 100).toFixed(1)}% of papers)`);
 
-                // Add technical details
-                html += `
-                    <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
-                        <strong>Technical Details:</strong><br>
-                        • Documents: ${stats.memory.fastPlaid.documentCount}<br>
-                        • Embedding Dimension: ${stats.memory.fastPlaid.embeddingDim}<br>
-                        • FastPlaid: Uses Float32Array (4 bytes/float) in WASM linear memory<br>
-                        • Direct MaxSim: Uses JavaScript numbers (8 bytes/float) in JS heap<br>
-                        • Memory savings: ${stats.memory.savings ? '~' + stats.memory.savings.percent + '% reduction' : 'N/A'}
-                    </div>
-                `;
+                    if (directTime !== null) {
+                        const speedup = (directTime / fastplaidTime).toFixed(1);
+                        console.log(`   ⚡ Speedup: ${speedup}x faster than Direct MaxSim`);
+                    }
+                } else {
+                    console.log('⏳ FastPlaid: Not loaded yet');
+                }
+
+                // Display results (partial or full)
+                displayResults(
+                    directResults ? { results: directResults, searchTime: directTime } : null,
+                    fastplaidResult ? {
+                        results: fastplaidResult.results,
+                        searchTime: fastplaidTime,
+                        candidatesSearched: fastplaidResult.candidatesSearched,
+                        numClustersProbed: fastplaidResult.numClustersProbed
+                    } : null
+                );
+
+                // Show comparison panel
+                document.getElementById('comparisonPanel').style.display = 'grid';
+
+                // Show status message
+                if (directResults && fastplaidResult) {
+                    const speedupCalc = (directTime / fastplaidTime).toFixed(1);
+                    const directSizeMB = 49.5;
+                    const fastplaidSizeMB = 6.2;
+                    const compression = (directSizeMB / fastplaidSizeMB).toFixed(1);
+                    const searchPercent = (fastplaidResult.candidatesSearched / papers.length * 100).toFixed(0);
+                    showStatus(
+                        `✅ FastPlaid: ${compression}x smaller, ${speedupCalc}x faster! ` +
+                        `(IVF: ${fastplaidResult.numClustersProbed} clusters → ${searchPercent}% of papers searched)`,
+                        'success'
+                    );
+                } else if (directResults) {
+                    showStatus(`✅ Direct MaxSim results shown (FastPlaid still loading)`, 'info');
+                } else if (fastplaidResult) {
+                    showStatus(`✅ FastPlaid results shown (Direct MaxSim still loading)`, 'info');
+                }
+
+            } catch (error) {
+                console.error('Search error:', error);
+                showStatus(`❌ Search error: ${error.message}`, 'error');
+            } finally {
+                // Re-enable search button if at least one index is ready
+                if (loadingState.colbert.loaded && (loadingState.directMaxSim.loaded || loadingState.fastPlaid.loaded)) {
+                    document.getElementById('searchBtn').disabled = false;
+                }
+            }
+        }
+
+        function displayResults(directResults, fastplaidResults) {
+            // Update IVF statistics (if FastPlaid results available)
+            if (fastplaidResults) {
+                document.getElementById('clustersProbed').textContent = fastplaidResults.numClustersProbed || '~6';
+                document.getElementById('candidatesCount').textContent = fastplaidResults.candidatesSearched || '~300';
             }
 
-            performanceStats.innerHTML = html;
-        }
+            // Update Direct MaxSim panel
+            const directTimeEl = document.getElementById('directTime');
+            const directDiv = document.getElementById('directResults');
 
-        function displayDemoResults(query, topK) {
-            // Demo results to show the UI
-            const demoResults = [
-                { id: 1, title: "Introduction to Machine Learning", score: 0.9234 },
-                { id: 2, title: "Deep Learning Algorithms Overview", score: 0.8876 },
-                { id: 3, title: "Neural Networks and Backpropagation", score: 0.8654 },
-                { id: 4, title: "Supervised Learning Techniques", score: 0.8432 },
-                { id: 5, title: "Unsupervised Learning Methods", score: 0.8123 }
-            ].slice(0, topK);
+            if (directResults) {
+                // Show results
+                directTimeEl.textContent = `${directResults.searchTime.toFixed(1)} ms`;
+                directTimeEl.className = 'method-time ' + (fastplaidResults && directResults.searchTime > fastplaidResults.searchTime ? 'slow' : 'fast');
 
-            let html = '<div class="results">';
-            html += `<div><strong>Demo Results for:</strong> "${query}"</div><br>`;
-            demoResults.forEach((result, index) => {
-                html += `
+                directDiv.innerHTML = directResults.results.map((result, idx) => `
                     <div class="result-item">
-                        <div><strong>${result.title}</strong></div>
-                        <div>Document ID: ${result.id}</div>
-                        <div class="score">ColBERT Score: ${result.score.toFixed(4)}</div>
+                        <div class="result-title">${idx + 1}. ${result.paper.title}</div>
+                        <div class="result-score">Score: ${result.score.toFixed(4)} | ID: ${result.paper.id}</div>
+                        <div class="result-abstract">${result.paper.abstract.substring(0, 150)}...</div>
                     </div>
-                `;
-            });
-            html += '</div>';
-            results.innerHTML = html;
+                `).join('');
+            } else {
+                // Show loading indicator
+                directTimeEl.textContent = '⏳ Loading...';
+                directTimeEl.className = 'method-time';
+                directDiv.innerHTML = '<div class="status-message status-info">⏳ Direct MaxSim index is still loading. Results will appear when ready.</div>';
+            }
+
+            // Update FastPlaid panel
+            const fastplaidTimeEl = document.getElementById('fastplaidTime');
+            const fastplaidDiv = document.getElementById('fastplaidResults');
+
+            if (fastplaidResults) {
+                // Show results
+                fastplaidTimeEl.textContent = `${fastplaidResults.searchTime.toFixed(1)} ms`;
+                fastplaidTimeEl.className = 'method-time ' + (directResults && fastplaidResults.searchTime < directResults.searchTime ? 'fast' : 'slow');
+
+                fastplaidDiv.innerHTML = fastplaidResults.results.map((result, idx) => `
+                    <div class="result-item">
+                        <div class="result-title">${idx + 1}. ${result.paper.title}</div>
+                        <div class="result-score">Score: ${result.score.toFixed(4)} | ID: ${result.paper.id}</div>
+                        <div class="result-abstract">${result.paper.abstract.substring(0, 150)}...</div>
+                    </div>
+                `).join('');
+            } else {
+                // Show loading indicator
+                fastplaidTimeEl.textContent = '⏳ Loading...';
+                fastplaidTimeEl.className = 'method-time';
+                fastplaidDiv.innerHTML = '<div class="status-message status-info">⏳ FastPlaid index is still loading. Results will appear when ready.</div>';
+            }
         }
 
-        // Show initial instructions
-        showStatus(initStatus, 'Click "Initialize WASM Module" to start');
-        updatePerformanceStats(); // Initialize empty stats table
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('statusMessage');
+            statusDiv.innerHTML = `<div class="status-message status-${type}">${message}</div>`;
         }
-
-        // Initialize the app when DOM is loaded
-        document.addEventListener('DOMContentLoaded', initializeApp);
     </script>
 </body>
 </html>

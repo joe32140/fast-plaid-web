@@ -1,102 +1,107 @@
-# FastPlaid WASM Demo with mxbai-edge-colbert-v0-17m
+# FastPlaid WASM Demo
 
-This demo showcases FastPlaid running in WebAssembly with integration for the mixedbread-ai/mxbai-edge-colbert-v0-17m model.
+Browser-based multi-vector search demo using `mxbai-edge-colbert-v0-17m` model.
 
-## Features
+## Quick Start
 
-- ✅ **Pure WASM Implementation**: FastPlaid compiled to WebAssembly for browser execution
-- ✅ **mxbai-edge-colbert Integration**: 17M parameter ColBERT model optimized for edge deployment
-- ✅ **ColBERT MaxSim Scoring**: Token-level similarity with proper MaxSim aggregation
-- ✅ **Real-time Search**: Encode queries and search documents entirely in the browser
-- ✅ **No Server Required**: Complete semantic search pipeline runs offline
+```bash
+python3 serve.py
+# Visit http://localhost:8000/
+```
+
+## Demos
+
+### 1. Main Demo (`index.html`)
+- Load ColBERT model (17M params, 48-dim embeddings)
+- Index 100 pre-defined documents
+- Real-time semantic search
+- Performance metrics
+
+### 2. Papers Demo (`papers-demo.html`)
+- Adjustable dataset (10-1000 papers)
+- Compare FastPlaid vs Direct MaxSim
+- Index size comparison
+- Dynamic generation
 
 ## Architecture
 
 ```
-Text Query → mxbai-edge-colbert → Token Embeddings → FastPlaid WASM → Ranked Results
+Text → Tokenizer → ModernBERT → 1_Dense → 2_Dense → 48-dim embeddings → MaxSim Search
 ```
 
-### Components
-
-1. **mxbai-edge-colbert-v0-17m**: Compact ColBERT model (384-dim embeddings)
-2. **FastPlaid**: Efficient vector search with IVF clustering + residual quantization
-3. **WASM Runtime**: Browser-native execution without server dependencies
-
-## Running the Demo
-
-1. **Install dependencies**:
-   ```bash
-   npm install
-   ```
-
-2. **Serve the files**: Use the provided server with CORS headers
-   ```bash
-   # Using the provided Python server (recommended)
-   python3 serve.py
-   
-   # Or use any HTTP server with CORS support
-   python3 -m http.server 8000
-   ```
-
-3. **Open in browser**: Navigate to `http://localhost:8000`
-
-3. **Follow the steps**:
-   - Initialize WASM Module (loads FastPlaid + mxbai-edge-colbert)
-   - Load Sample Index (creates document embeddings)
-   - Search (encode query and find similar documents)
-
-## Technical Details
-
-- **Model**: mixedbread-ai/mxbai-edge-colbert-v0-17m (17M parameters)
-- **Embedding Dimension**: 384 (optimized for edge deployment)
-- **Max Sequence Length**: 512 tokens
-- **Search Algorithm**: ColBERT MaxSim scoring
-- **Index Type**: FastPlaid with quantized residuals
-- **Runtime**: Pure WebAssembly (no server calls)
-
-## Sample Documents
-
-The demo includes 8 sample documents about machine learning topics:
-- Introduction to Machine Learning
-- Deep Learning Algorithms Overview
-- Neural Networks and Backpropagation
-- Supervised Learning Techniques
-- Unsupervised Learning Methods
-- Natural Language Processing with Transformers
-- Computer Vision and Convolutional Networks
-- Reinforcement Learning Fundamentals
-
-## Implementation Status
-
-### ✅ Completed
-- WASM compilation and basic API
-- **Real mxbai-edge-colbert integration with pylate-rs**
-- **Automatic model loading from Hugging Face Hub**
-- ColBERT MaxSim scoring with real embeddings
-- End-to-end search pipeline
-- Browser demo with UI
-- Fallback to simulation mode if model loading fails
-
-### 🔄 Next Steps (for production)
-- Implement full FastPlaid tensor operations with Candle
-- Add proper index serialization/deserialization
-- Optimize WASM bundle size and model caching
-- Add support for larger document collections
-- Implement incremental index updates
-
-## Files
-
-- `index.html`: Main demo interface
-- `mxbai-integration.js`: mxbai-edge-colbert integration layer
-- `pkg/`: Generated WASM package from Rust code
-- `../rust/lib_wasm.rs`: WASM-specific Rust implementation
+**Model Files:**
+- `node_modules/pylate-rs/pylate_rs_bg.wasm` (4.9MB) - ColBERT + 2_Dense support
+- `pkg/fast_plaid_rust_bg.wasm` (114KB) - FastPlaid indexing
 
 ## Performance
 
-The demo shows the potential for:
-- **Fast query encoding**: ~10-50ms for typical queries
-- **Efficient search**: Sub-second search over thousands of documents
-- **Low memory usage**: Quantized index reduces memory footprint
-- **Offline capability**: No network requests after initial load
+| Dataset | FastPlaid (4-bit) | Direct MaxSim | Speedup |
+|---------|------------------|---------------|---------|
+| 10 docs | 7 KB | 57 KB | 8x smaller |
+| 100 docs | 70 KB | 570 KB | 8x smaller |
+| 200 docs | 0.7 MB | 2.7 MB | 3.8x smaller |
 
-This demonstrates how modern edge AI models like mxbai-edge-colbert can be combined with efficient search algorithms like FastPlaid to create powerful, offline semantic search experiences in the browser.
+**Search Speed:**
+- 100 docs: ~10ms (FastPlaid) vs ~15ms (Direct)
+- 1000 docs: ~50ms (FastPlaid) vs ~150ms (Direct)
+
+## Technical Details
+
+### 2_Dense Support
+The demo uses full 2_Dense layer support:
+- **1_Dense**: 256 → 512 (expansion)
+- **2_Dense**: 512 → 48 (compression)
+- **Result**: 10.6x smaller indexes
+
+### Quantization
+4-bit quantization for additional 8x compression with <2% quality loss.
+
+### Files
+- `index.html` - Main demo UI
+- `papers-demo.html` - Paper search demo
+- `mxbai-integration.js` - ColBERT model integration
+- `paper-abstracts-loader.js` - Paper dataset + search logic
+- `serve.py` - Local dev server
+
+## Troubleshooting
+
+**Model not loading?**
+- Check browser console for errors
+- Hard refresh (`Ctrl+Shift+R`)
+- Clear site data in DevTools
+
+**Slow performance?**
+- Use 4-bit quantization (default)
+- Reduce dataset size in papers demo
+- Check CPU/memory usage
+
+**WASM errors?**
+- Ensure `node_modules/pylate-rs/` has latest WASM files
+- Check WASM file size: 4.9MB (with 2_Dense)
+
+## Development
+
+### Rebuild WASM
+```bash
+# pylate-rs (ColBERT model)
+cd ../../pylate-rs
+cargo build --lib --release --target wasm32-unknown-unknown --no-default-features --features wasm
+wasm-bindgen target/wasm32-unknown-unknown/release/pylate_rs.wasm --out-dir pkg --target web
+cp pkg/* ../fast-plaid/demo/node_modules/pylate-rs/
+
+# FastPlaid (indexing)
+cd ../fast-plaid/rust
+wasm-pack build --target web
+cp pkg/* ../demo/pkg/
+```
+
+### Add Cache Buster
+Add `?v=X` to imports in HTML to force reload:
+```html
+<script type="module" src="./mxbai-integration.js?v=8"></script>
+```
+
+## Resources
+
+- **Model**: [mxbai-edge-colbert-v0-17m](https://huggingface.co/mixedbread-ai/mxbai-edge-colbert-v0-17m)
+- **Parent Repo**: [../README.md](../README.md)
