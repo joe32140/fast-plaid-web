@@ -23,6 +23,8 @@ struct ResidualCodec4bit {
     num_centroids: usize,
     centroids: Vec<f32>,  // [num_centroids, embedding_dim]
     bucket_weights: Vec<f32>,  // [16, embedding_dim] - 2^4 = 16 buckets
+    bucket_cutoffs: Vec<f32>,  // [17] - boundaries between buckets (including -∞ and ∞)
+    avg_residual: Vec<f32>,  // [embedding_dim] - average residual across all tokens
 }
 
 impl ResidualCodec4bit {
@@ -46,6 +48,8 @@ impl ResidualCodec4bit {
             num_centroids,
             centroids,
             bucket_weights,
+            bucket_cutoffs: vec![0.0; 17],  // Will be computed during training (17 boundaries for 16 buckets)
+            avg_residual: vec![0.0; embedding_dim],  // Will be computed during training
         }
     }
 
@@ -100,10 +104,38 @@ impl ResidualCodec4bit {
             self.centroids = new_centroids;
         }
 
-        // After training centroids, learn optimal bucket weights from residual distribution
+        // After training centroids, compute average residual and learn bucket weights
+        self.compute_avg_residual(embeddings, num_tokens);
         self.train_bucket_weights(embeddings, num_tokens);
 
         console_log!("✅ Trained {} centroids with {} iterations", self.num_centroids, num_iters);
+    }
+
+    /// Compute average residual across all tokens (Phase 1: Native parity)
+    fn compute_avg_residual(&mut self, embeddings: &[f32], num_tokens: usize) {
+        let mut sum_residuals = vec![0.0; self.embedding_dim];
+        let mut count = 0;
+
+        for token_idx in 0..num_tokens {
+            let token_start = token_idx * self.embedding_dim;
+            let token_emb = &embeddings[token_start..token_start + self.embedding_dim];
+
+            let centroid_idx = self.find_nearest_centroid(token_emb);
+            let centroid_start = centroid_idx * self.embedding_dim;
+            let centroid = &self.centroids[centroid_start..centroid_start + self.embedding_dim];
+
+            for d in 0..self.embedding_dim {
+                sum_residuals[d] += token_emb[d] - centroid[d];
+            }
+            count += 1;
+        }
+
+        // Average across all tokens
+        for d in 0..self.embedding_dim {
+            self.avg_residual[d] = sum_residuals[d] / count as f32;
+        }
+
+        console_log!("   Average residual computed (Phase 1: Native parity)");
     }
 
     /// Train bucket weights based on actual residual distribution
@@ -120,7 +152,8 @@ impl ResidualCodec4bit {
             let centroid = &self.centroids[centroid_start..centroid_start + self.embedding_dim];
 
             for d in 0..self.embedding_dim {
-                let residual = token_emb[d] - centroid[d];
+                // Centered residual: subtract both centroid AND average residual
+                let residual = token_emb[d] - centroid[d] - self.avg_residual[d];
                 all_residuals.push(residual);
             }
         }
@@ -128,32 +161,35 @@ impl ResidualCodec4bit {
         // Compute percentiles for bucket boundaries (16 buckets = 15 boundaries)
         all_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        // For each bucket, compute the average residual value in that quantile
+        // Phase 2: Compute explicit bucket cutoffs as MIDPOINTS between bucket weights
+        // This enables binary search quantization without changing the learned weights
+        //
+        // Approach: For each dimension, compute average bucket weight across all dimensions,
+        // then set cutoffs as midpoints between consecutive bucket weights
+
+        // Compute global average bucket weight for each bucket (average across dimensions)
+        let mut avg_bucket_weights = vec![0.0f32; 16];
         for bucket in 0..16 {
-            let start_pct = bucket as f32 / 16.0;
-            let end_pct = (bucket + 1) as f32 / 16.0;
-
-            let start_idx = (start_pct * all_residuals.len() as f32) as usize;
-            let end_idx = (end_pct * all_residuals.len() as f32) as usize;
-
-            let bucket_residuals = &all_residuals[start_idx..end_idx];
-            let avg_residual: f32 = if bucket_residuals.is_empty() {
-                0.0
-            } else {
-                bucket_residuals.iter().sum::<f32>() / bucket_residuals.len() as f32
-            };
-
-            // Update bucket weights for all dimensions with this average
+            let mut sum = 0.0;
             for d in 0..self.embedding_dim {
-                let weight_idx = bucket * self.embedding_dim + d;
-                self.bucket_weights[weight_idx] = avg_residual;
+                sum += self.bucket_weights[bucket * self.embedding_dim + d];
             }
+            avg_bucket_weights[bucket] = sum / self.embedding_dim as f32;
         }
+
+        // Set cutoffs as midpoints between consecutive average bucket weights
+        self.bucket_cutoffs = vec![f32::NEG_INFINITY];
+        for i in 0..15 {
+            let midpoint = (avg_bucket_weights[i] + avg_bucket_weights[i + 1]) / 2.0;
+            self.bucket_cutoffs.push(midpoint);
+        }
+        self.bucket_cutoffs.push(f32::INFINITY);
 
         // Log residual statistics
         let min_res = all_residuals.first().copied().unwrap_or(0.0);
         let max_res = all_residuals.last().copied().unwrap_or(0.0);
         console_log!("   Residual range: [{:.4}, {:.4}]", min_res, max_res);
+        console_log!("   Bucket cutoffs learned (Phase 2: Native parity)");
     }
 
     /// Find nearest centroid index for a token embedding
@@ -180,25 +216,25 @@ impl ResidualCodec4bit {
     }
 
     /// Quantize a residual value to 4-bit bucket index (0-15)
-    /// Finds the bucket with the closest learned weight
+    /// Phase 2: Use binary search with explicit cutoffs (faster and more precise)
     fn quantize_to_4bit(&self, value: f32) -> u8 {
-        let mut best_bucket = 0u8;
-        let mut best_diff = f32::INFINITY;
+        // Binary search to find the correct bucket
+        // cutoffs = [-∞, c1, c2, ..., c15, ∞]
+        // If value < c1, bucket 0; if c1 <= value < c2, bucket 1; etc.
 
-        // Find the bucket whose learned weight is closest to this value
-        // Note: all dimensions share the same bucket weights, so we just check bucket 0's embedding_dim
-        for bucket in 0..16 {
-            let weight_idx = bucket * self.embedding_dim; // Just check first dimension
-            let weight = self.bucket_weights[weight_idx];
-            let diff = (value - weight).abs();
+        let mut left = 0;
+        let mut right = 16;
 
-            if diff < best_diff {
-                best_diff = diff;
-                best_bucket = bucket as u8;
+        while left < right {
+            let mid = (left + right) / 2;
+            if value < self.bucket_cutoffs[mid + 1] {
+                right = mid;
+            } else {
+                left = mid + 1;
             }
         }
 
-        best_bucket
+        left.min(15) as u8
     }
 
     /// Pack two 4-bit values into one byte
@@ -233,7 +269,8 @@ impl ResidualCodec4bit {
 
             // Quantize each dimension of residual to 4 bits
             for d in 0..self.embedding_dim {
-                let residual = token_emb[d] - centroid[d];
+                // Phase 1: Subtract avg_residual to center the distribution
+                let residual = token_emb[d] - centroid[d] - self.avg_residual[d];
                 let bucket = self.quantize_to_4bit(residual);
                 residual_codes.push(bucket);
             }
@@ -276,8 +313,8 @@ impl ResidualCodec4bit {
                 let weight_idx = bucket * self.embedding_dim + d;
                 let residual = self.bucket_weights.get(weight_idx).copied().unwrap_or(0.0);
 
-                // Add centroid + residual (no scaling!)
-                embeddings.push(centroid[d] + residual);
+                // Phase 1: Add centroid + avg_residual + centered_residual
+                embeddings.push(centroid[d] + self.avg_residual[d] + residual);
             }
         }
 
@@ -723,6 +760,21 @@ impl FastPlaidQuantized {
             buffer.extend_from_slice(&val.to_le_bytes());
         }
 
+        // Write avg_residual (Phase 1)
+        for &val in &codec.avg_residual {
+            buffer.extend_from_slice(&val.to_le_bytes());
+        }
+
+        // Write bucket_cutoffs (Phase 2)
+        for &val in &codec.bucket_cutoffs {
+            buffer.extend_from_slice(&val.to_le_bytes());
+        }
+
+        // Write bucket_weights
+        for &val in &codec.bucket_weights {
+            buffer.extend_from_slice(&val.to_le_bytes());
+        }
+
         // Write quantized documents
         for doc in &self.documents {
             buffer.extend_from_slice(&doc.id.to_le_bytes());
@@ -809,8 +861,36 @@ impl FastPlaidQuantized {
             offset += 4;
         }
 
+        // Read avg_residual (Phase 1)
+        let mut avg_residual = Vec::with_capacity(self.embedding_dim);
+        for _ in 0..self.embedding_dim {
+            let val = f32::from_le_bytes(index_bytes[offset..offset + 4].try_into().unwrap());
+            avg_residual.push(val);
+            offset += 4;
+        }
+
+        // Read bucket_cutoffs (Phase 2)
+        let mut bucket_cutoffs = Vec::with_capacity(17);
+        for _ in 0..17 {
+            let val = f32::from_le_bytes(index_bytes[offset..offset + 4].try_into().unwrap());
+            bucket_cutoffs.push(val);
+            offset += 4;
+        }
+
+        // Read bucket_weights
+        let bucket_weights_size = 16 * self.embedding_dim;
+        let mut bucket_weights = Vec::with_capacity(bucket_weights_size);
+        for _ in 0..bucket_weights_size {
+            let val = f32::from_le_bytes(index_bytes[offset..offset + 4].try_into().unwrap());
+            bucket_weights.push(val);
+            offset += 4;
+        }
+
         let mut codec = ResidualCodec4bit::new(self.embedding_dim, num_centroids);
         codec.centroids = codec_centroids;
+        codec.avg_residual = avg_residual;
+        codec.bucket_cutoffs = bucket_cutoffs;
+        codec.bucket_weights = bucket_weights;
         self.codec = Some(codec);
 
         // Read quantized documents
