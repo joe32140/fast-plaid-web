@@ -1,0 +1,7 @@
+{
+  "total_tokens": 270518,
+  "embedding_dim": 48,
+  "num_papers": 1000,
+  "quantization": "8-bit",
+  "compression_ratio": "4.00x"
+}
