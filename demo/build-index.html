@@ -28,7 +28,7 @@
 
                 // Load embeddings.bin
                 log('📥 Loading embeddings.bin...');
-                const embResponse = await fetch('./data/fastplaid_4bit/embeddings.bin');
+                const embResponse = await fetch('./data/embeddings.bin');
                 const embData = await embResponse.arrayBuffer();
 
                 const view = new DataView(embData);
