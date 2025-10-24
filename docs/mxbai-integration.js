@@ -84,7 +84,7 @@ class MxbaiEdgeColbertIntegration {
         try {
             // Import pylate-rs WASM module
             console.log('📦 Importing pylate-rs WASM module...');
-            const pylateModule = await import('./node_modules/pylate-rs/pylate_rs.js');
+            const pylateModule = await import('./pkg/pylate_rs.js');
             console.log('🔧 Initializing WASM...');
             await pylateModule.default(); // Initialize WASM
             ColBERT = pylateModule.ColBERT;
