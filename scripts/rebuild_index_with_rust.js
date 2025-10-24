@@ -7,7 +7,7 @@
 import { readFile, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import init, { FastPlaidQuantized } from '../demo/node_modules/fast-plaid-rust/fast_plaid_rust.js';
+import init, { FastPlaidQuantized } from '../docs/node_modules/fast-plaid-rust/fast_plaid_rust.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
@@ -17,13 +17,13 @@ async function main() {
 
     // Initialize WASM
     console.log('📦 Loading WASM module...');
-    const wasmPath = join(projectRoot, 'demo/node_modules/fast-plaid-rust/fast_plaid_rust_bg.wasm');
+    const wasmPath = join(projectRoot, 'docs/node_modules/fast-plaid-rust/fast_plaid_rust_bg.wasm');
     const wasmBuffer = await readFile(wasmPath);
     await init(wasmBuffer);
     console.log('✅ WASM loaded\n');
 
     // Load embeddings.bin
-    const embPath = join(projectRoot, 'demo/data/embeddings.bin');
+    const embPath = join(projectRoot, 'docs/data/embeddings.bin');
     console.log(`📥 Loading embeddings from ${embPath}...`);
     const embData = await readFile(embPath);
 
@@ -93,7 +93,7 @@ async function main() {
     console.log('💾 Saving index...');
     const indexBytes = fastplaid.save_index();
 
-    const outputPath = join(projectRoot, 'demo/data/fastplaid_index_rust.bin');
+    const outputPath = join(projectRoot, 'docs/data/fastplaid_index_rust.bin');
     await writeFile(outputPath, indexBytes);
 
     const sizeMB = (indexBytes.length / 1_000_000).toFixed(2);

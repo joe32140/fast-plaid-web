@@ -26,7 +26,7 @@
 # Compute embeddings only
 python scripts/build_offline_wasm_index.py \
     --papers data/papers_1000.json \
-    --output demo/data
+    --output docs/data
 
 # Browser quantizes when page loads (10-15s)
 ```
@@ -36,12 +36,12 @@ python scripts/build_offline_wasm_index.py \
 # Step 1: Compute embeddings
 python scripts/build_offline_wasm_index.py \
     --papers data/papers_1000.json \
-    --output demo/data
+    --output docs/data
 
 # Step 2: Build .fastplaid offline
 node scripts/build_fastplaid_index.js \
-    demo/data \
-    demo/data/index.fastplaid
+    docs/data \
+    docs/data/index.fastplaid
 
 # Browser loads instantly (<1s)
 ```

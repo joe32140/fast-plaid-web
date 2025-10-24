@@ -59,7 +59,7 @@ pip install fast-plaid
 
 ### WASM Demo
 ```bash
-cd demo
+cd docs
 python3 serve.py
 # Visit http://localhost:8000/
 ```
@@ -69,12 +69,12 @@ python3 serve.py
 # 1. Compute embeddings (Python)
 python scripts/build_offline_wasm_index.py \
     --papers data/papers_1000.json \
-    --output demo/data
+    --output docs/data
 
 # 2. Build .fastplaid index (Node.js + WASM)
 node scripts/build_fastplaid_index.js \
-    demo/data \
-    demo/data/index.fastplaid
+    docs/data \
+    docs/data/index.fastplaid
 
 # 3. Deploy to browser
 # index.fastplaid: 6.2 MB, loads in <1s
@@ -195,11 +195,11 @@ fast-plaid/
 ├── rust/                  # Core Rust implementation
 │   ├── lib.rs            # FastPlaid index
 │   └── lib_wasm.rs       # WASM bindings
-├── demo/                 # Browser demos
+├── docs/                 # Browser demos (GitHub Pages)
 │   ├── index.html        # Main demo
-│   ├── papers-demo.html  # Paper search demo
+│   ├── build-index.html  # Index builder
 │   ├── mxbai-integration.js  # ColBERT integration
-│   └── node_modules/pylate-rs/  # ColBERT WASM
+│   └── node_modules/     # WASM modules
 ├── python/               # Python bindings
 └── README.md            # This file
 ```

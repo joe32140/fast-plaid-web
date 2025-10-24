@@ -87,12 +87,12 @@ The demo uses full 2_Dense layer support:
 cd ../../pylate-rs
 cargo build --lib --release --target wasm32-unknown-unknown --no-default-features --features wasm
 wasm-bindgen target/wasm32-unknown-unknown/release/pylate_rs.wasm --out-dir pkg --target web
-cp pkg/* ../fast-plaid/demo/node_modules/pylate-rs/
+cp pkg/* ../fast-plaid/docs/node_modules/pylate-rs/
 
 # FastPlaid (indexing)
 cd ../fast-plaid/rust
 wasm-pack build --target web
-cp pkg/* ../demo/pkg/
+cp pkg/* ../docs/pkg/
 ```
 
 ### Add Cache Buster
