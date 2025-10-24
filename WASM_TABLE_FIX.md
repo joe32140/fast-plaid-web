@@ -21,7 +21,7 @@ The `max=64` limit prevented the table from growing beyond 64 entries, causing t
 
 ## Solution
 
-We use a post-build script ([fix_wasm_table.py](fix_wasm_table.py)) to modify the WASM binary and increase the funcref table's maximum size from 64 to 256:
+We use WABT tools (WebAssembly Binary Toolkit) to convert the WASM to text format, modify the table limits, and convert back:
 
 ```
 table[0] type=funcref initial=64 max=256
@@ -31,27 +31,29 @@ This allows the table to grow as needed when more functions are added.
 
 ## How It Works
 
-The `fix_wasm_table.py` script:
+The fix uses `wasm2wat` + `sed` + `wat2wasm`:
 
-1. Reads the WASM binary
-2. Finds the Table section (section ID 4)
-3. Locates the funcref table (type 0x70)
-4. Replaces the max size LEB128 value: 64 → 256
-5. Writes the modified WASM back
+1. Convert WASM binary to WAT (WebAssembly Text format)
+2. Use `sed` to replace table limit: `64 64 funcref` → `64 256 funcref`
+3. Convert WAT back to WASM binary
 
-### Technical Details
-
-WASM binary format for tables:
+```bash
+wasm2wat docs/pkg/fast_plaid_rust_bg.wasm 2>&1 | \
+  sed 's/(table (;0;) 64 64 funcref)/(table (;0;) 64 256 funcref)/g' | \
+  wat2wasm -o docs/pkg/fast_plaid_rust_bg.wasm -
 ```
-Section 4: Table
-├── Section size (LEB128)
-├── Number of tables (LEB128)
-└── For each table:
-    ├── Table type (0x70 = funcref, 0x6f = externref)
-    ├── Limits type (0x00 = no max, 0x01 = has max)
-    ├── Initial size (LEB128)
-    └── Max size (LEB128, if limits type == 0x01)
-```
+
+### Why WABT Tools?
+
+**Python binary modification approach FAILED** because:
+- Changing LEB128 from 1 byte (64) to 2 bytes (256) shifts all subsequent data
+- This corrupts the WASM structure and breaks validation
+- Error: "reached end while decoding" or "multiple Type sections"
+
+WABT tools work because:
+- They properly parse and reconstruct the entire WASM structure
+- All offsets and sizes are recalculated correctly
+- No corruption or validation errors
 
 ## Build Process
 
@@ -74,11 +76,13 @@ This automatically:
 # Step 1: Build WASM
 RUSTFLAGS="-C target-feature=+simd128" wasm-pack build --target web --out-dir docs/pkg --release
 
-# Step 2: Fix table limits
-python3 fix_wasm_table.py
+# Step 2: Fix table limits using WABT tools
+wasm2wat docs/pkg/fast_plaid_rust_bg.wasm 2>&1 | \
+  sed 's/(table (;0;) 64 64 funcref)/(table (;0;) 64 256 funcref)/g' | \
+  wat2wasm -o docs/pkg/fast_plaid_rust_bg.wasm -
 
 # Step 3: Verify
-wasm-objdump -x docs/pkg/fast_plaid_rust_bg.wasm | grep "table\[0\]"
+wasm-objdump -x docs/pkg/fast_plaid_rust_bg.wasm -j Table
 # Should show: table[0] type=funcref initial=64 max=256
 ```
 
@@ -92,13 +96,21 @@ We tried several approaches to fix this during compilation:
    # Error: rust-lld: error: unknown argument '--initial-table=128'
    ```
 
-2. **Cargo.toml metadata** - No effect on table limits
-   ```toml
-   [package.metadata.wasm-pack.profile.release.wasm-bindgen]
-   # These options don't control table size
+2. **build.rs with linker flags** - Same linker errors
+   ```rust
+   println!("cargo:rustc-link-arg=--initial-table=256");
+   # Error: rust-lld: error: unknown argument '--initial-table=256'
    ```
 
-3. **wasm-bindgen settings** - No table size control exposed
+3. **.cargo/config.toml** - Same linker errors
+   ```toml
+   [target.wasm32-unknown-unknown]
+   rustflags = ["-C", "link-arg=--initial-table=256"]
+   ```
+
+4. **Cargo.toml metadata** - No effect on table limits
+
+5. **wasm-bindgen settings** - No table size control exposed
 
 The post-build modification is the most reliable solution.
 
@@ -189,7 +201,10 @@ Until then, the post-build fix is necessary.
 
 **Solution**:
 ```bash
-python3 fix_wasm_table.py
+wasm2wat docs/pkg/fast_plaid_rust_bg.wasm 2>&1 | \
+  sed 's/(table (;0;) 64 64 funcref)/(table (;0;) 64 256 funcref)/g' | \
+  wat2wasm -o docs/pkg/fast_plaid_rust_bg.wasm -
+
 git add docs/pkg/fast_plaid_rust_bg.wasm
 git commit -m "fix: Apply WASM table size fix"
 git push
@@ -204,19 +219,41 @@ git push
 2. Verify magic number: `hexdump -C docs/pkg/fast_plaid_rust_bg.wasm | head -1`
    Should start with: `00 61 73 6d` (`\0asm`)
 
-### Error: "Multiple Type sections"
+### Error: "Multiple Type sections" or "reached end while decoding"
 
-**Cause**: WASM has unconventional structure (seen in wasm-objdump output).
+**Cause**: WASM file was corrupted by Python binary modification that changed LEB128 byte sizes.
 
-**Impact**: None - the fix still works. This is a parsing warning from wasm-objdump, not a runtime error.
+**Solution**: Rebuild cleanly from source:
+```bash
+RUSTFLAGS="-C target-feature=+simd128" wasm-pack build --target web --out-dir docs/pkg --release
+wasm2wat docs/pkg/fast_plaid_rust_bg.wasm 2>&1 | \
+  sed 's/(table (;0;) 64 64 funcref)/(table (;0;) 64 256 funcref)/g' | \
+  wat2wasm -o docs/pkg/fast_plaid_rust_bg.wasm -
+```
+
+### Important: pylate_rs is a Pre-built Dependency
+
+**DO NOT modify pylate_rs_bg.wasm** - it's a pre-built WASM module for the ColBERT model, not part of our build process. Only modify fast_plaid_rust_bg.wasm.
+
+If pylate_rs gets corrupted, restore from a working commit:
+```bash
+git show 9a0aa9e:docs/pkg/pylate_rs_bg.wasm > docs/pkg/pylate_rs_bg.wasm
+git show 9a0aa9e:docs/pkg/pylate_rs.js > docs/pkg/pylate_rs.js
+```
 
 ## Related Issues
 
 - wasm-bindgen issue: https://github.com/rustwasm/wasm-bindgen/issues/2367
 - Rust WASM book: https://rustwasm.github.io/docs/book/reference/code-size.html
 
+## Key Learnings
+
+1. **Python binary modification fails** - Changing LEB128 sizes corrupts WASM
+2. **WABT tools work reliably** - Proper parsing and reconstruction
+3. **Only modify our WASM** - Leave pre-built dependencies (pylate_rs) alone
+4. **Test before committing** - Load the page locally to verify it works
+
 ## See Also
 
 - [INCREMENTAL_UPDATES.md](INCREMENTAL_UPDATES.md) - Feature documentation
-- [build_wasm.sh](build_wasm.sh) - Automated build script
-- [fix_wasm_table.py](fix_wasm_table.py) - Table fix script
+- [build_wasm.sh](build_wasm.sh) - Automated build script with WABT tools
