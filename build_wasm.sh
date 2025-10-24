@@ -6,8 +6,11 @@ set -e
 echo "🔨 Building WASM package..."
 RUSTFLAGS="-C target-feature=+simd128" wasm-pack build --target web --out-dir docs/pkg --release
 
-echo "🔧 Fixing WASM table limits..."
-python3 fix_wasm_table.py
+echo "🔧 Fixing WASM table limits using WABT tools..."
+echo "   fast_plaid_rust: 64 → 256"
+wasm2wat docs/pkg/fast_plaid_rust_bg.wasm 2>&1 | \
+  sed 's/(table (;0;) 64 64 funcref)/(table (;0;) 64 256 funcref)/g' | \
+  wat2wasm -o docs/pkg/fast_plaid_rust_bg.wasm -
 
 echo "✅ Build complete!"
 echo ""
