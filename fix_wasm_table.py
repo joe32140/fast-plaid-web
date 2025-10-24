@@ -108,11 +108,28 @@ def encode_leb128(value):
     return bytes(result)
 
 if __name__ == '__main__':
-    input_file = 'docs/pkg/fast_plaid_rust_bg.wasm'
-    output_file = 'docs/pkg/fast_plaid_rust_bg.wasm'
+    files_to_fix = [
+        'docs/pkg/fast_plaid_rust_bg.wasm',
+        'docs/pkg/pylate_rs_bg.wasm',
+    ]
 
-    if fix_wasm_table(input_file, output_file):
-        print("\n✅ WASM table limits fixed successfully")
+    success = True
+    for wasm_file in files_to_fix:
+        print(f"\n{'='*60}")
+        print(f"Processing: {wasm_file}")
+        print('='*60)
+        if fix_wasm_table(wasm_file, wasm_file):
+            print(f"✅ {wasm_file} fixed successfully")
+        else:
+            print(f"❌ Failed to fix {wasm_file}")
+            success = False
+
+    if success:
+        print("\n" + "="*60)
+        print("✅ All WASM files fixed successfully")
+        print("="*60)
     else:
-        print("\n❌ Failed to fix WASM table limits")
+        print("\n" + "="*60)
+        print("❌ Some WASM files failed to fix")
+        print("="*60)
         sys.exit(1)

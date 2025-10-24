@@ -182,24 +182,33 @@ Text → Tokenizer → ModernBERT (256d) → 1_Dense (512d) → 2_Dense (48d) �
 The WASM package includes both FastPlaid indexing and ColBERT model inference:
 
 ```bash
-# Build pylate-rs with 2_Dense support
+# Quick build (recommended)
+./build_wasm.sh
+
+# Or manual build:
+# 1. Build pylate-rs with 2_Dense support
 cd pylate-rs
 cargo build --lib --release --target wasm32-unknown-unknown \
     --no-default-features --features wasm
 
-# Generate bindings
+# 2. Generate bindings
 cargo install wasm-bindgen-cli --version 0.2.104
 wasm-bindgen target/wasm32-unknown-unknown/release/pylate_rs.wasm \
     --out-dir pkg --target web
 
-# Build FastPlaid WASM
-cd rust
-wasm-pack build --target web
+# 3. Build FastPlaid WASM
+cd ..
+RUSTFLAGS="-C target-feature=+simd128" wasm-pack build --target web --out-dir docs/pkg --release
+
+# 4. Fix WASM table limits (required for v1.3.0+)
+python3 fix_wasm_table.py
 ```
 
 **Output:**
 - `pylate_rs_bg.wasm` (4.9MB) - ColBERT model + 2_Dense
-- `fast_plaid_rust_bg.wasm` (114KB) - Indexing + search
+- `fast_plaid_rust_bg.wasm` (171KB) - Indexing + search with incremental updates
+
+**Note**: The table fix step is required for v1.3.0+ to support incremental update methods. See [WASM_TABLE_FIX.md](WASM_TABLE_FIX.md) for details.
 
 ## 🎨 Demo Features
 
