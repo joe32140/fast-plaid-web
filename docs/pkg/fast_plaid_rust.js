@@ -234,6 +234,22 @@ export class FastPlaidQuantized {
         }
     }
     /**
+     * Incrementally add new documents to the index without full rebuild
+     * Uses existing codec to compress new documents and stores IVF updates as deltas
+     * @param {Float32Array} embeddings_data
+     * @param {BigInt64Array} doc_info
+     */
+    update_index_incremental(embeddings_data, doc_info) {
+        const ptr0 = passArrayF32ToWasm0(embeddings_data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray64ToWasm0(doc_info, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.fastplaidquantized_update_index_incremental(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * Search with quantized embeddings
      * @param {Float32Array} query_embeddings
      * @param {Uint32Array} query_shape
@@ -293,6 +309,7 @@ export class FastPlaidQuantized {
     /**
      * Save the quantized index to binary format
      * Returns binary data that can be saved to disk
+     * Note: Automatically compacts deltas before saving for optimal performance
      * @returns {Uint8Array}
      */
     save_index() {
@@ -312,6 +329,16 @@ export class FastPlaidQuantized {
         const ptr0 = passArray8ToWasm0(index_bytes, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.fastplaidquantized_load_index(this.__wbg_ptr, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Manually trigger compaction of deltas into base IVF
+     * Useful for forcing compaction before save or for performance tuning
+     */
+    compact_index() {
+        const ret = wasm.fastplaidquantized_compact_index(this.__wbg_ptr);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }

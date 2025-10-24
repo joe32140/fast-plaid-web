@@ -380,6 +380,13 @@ pub struct QueryResult {
     pub num_clusters_probed: usize,
 }
 
+/// Delta entry for incremental IVF updates
+#[derive(Clone, Debug)]
+struct IVFDelta {
+    cluster_id: usize,
+    doc_id: usize,
+}
+
 /// WASM wrapper for quantized FastPlaid
 #[wasm_bindgen]
 pub struct FastPlaidQuantized {
@@ -388,9 +395,13 @@ pub struct FastPlaidQuantized {
     documents: Vec<QuantizedDocument>,
     codec: Option<ResidualCodec4bit>,
     // IVF (Inverted File Index) for fast approximate search
-    ivf_clusters: Vec<Vec<usize>>,  // cluster_id -> [doc_indices]
+    ivf_clusters: Vec<Vec<usize>>,  // cluster_id -> [doc_indices] (base index)
     ivf_centroids: Vec<f32>,         // [num_clusters, embedding_dim]
     num_clusters: usize,
+    // Delta-encoded IVF for incremental updates
+    ivf_deltas: Vec<IVFDelta>,       // Pending additions to IVF
+    delta_threshold: usize,          // Compact when deltas exceed this percentage
+    base_doc_count: usize,           // Number of documents in base index
 }
 
 #[wasm_bindgen]
@@ -402,6 +413,7 @@ impl FastPlaidQuantized {
 
         console_log!("🚀 Initializing FastPlaid WASM with 4-bit quantization...");
         console_log!("   🗜️ 8x compression vs f32 - fit more papers in GitHub Pages!");
+        console_log!("   🔄 With incremental update support!");
 
         Ok(FastPlaidQuantized {
             index_loaded: false,
@@ -411,6 +423,9 @@ impl FastPlaidQuantized {
             ivf_clusters: Vec::new(),
             ivf_centroids: Vec::new(),
             num_clusters: 0,
+            ivf_deltas: Vec::new(),
+            delta_threshold: 10, // Compact when deltas exceed 10% of base
+            base_doc_count: 0,
         })
     }
 
@@ -504,6 +519,95 @@ impl FastPlaidQuantized {
         self.build_ivf_index(embeddings_data, doc_info, num_docs)?;
 
         self.index_loaded = true;
+        self.base_doc_count = num_docs;
+
+        Ok(())
+    }
+
+    /// Incrementally add new documents to the index without full rebuild
+    /// Uses existing codec to compress new documents and stores IVF updates as deltas
+    #[wasm_bindgen]
+    pub fn update_index_incremental(
+        &mut self,
+        embeddings_data: &[f32],
+        doc_info: &[i64],
+    ) -> Result<(), JsValue> {
+        if !self.index_loaded {
+            return Err(JsValue::from_str("No index loaded. Call load_documents_quantized() first."));
+        }
+
+        let codec = self.codec.as_ref()
+            .ok_or_else(|| JsValue::from_str("Codec not initialized"))?;
+
+        console_log!("🔄 Incrementally updating index...");
+
+        if doc_info.len() % 2 != 0 {
+            return Err(JsValue::from_str("doc_info must contain pairs of [id, num_tokens]"));
+        }
+
+        let num_new_docs = doc_info.len() / 2;
+        let total_new_tokens: usize = (0..num_new_docs)
+            .map(|i| doc_info[i * 2 + 1] as usize)
+            .sum();
+
+        console_log!("   Adding {} new documents ({} tokens)", num_new_docs, total_new_tokens);
+
+        // Encode new documents using EXISTING codec (no retraining)
+        let mut offset = 0;
+        let start_doc_idx = self.documents.len();
+
+        for i in 0..num_new_docs {
+            let doc_id = doc_info[i * 2];
+            let num_tokens = doc_info[i * 2 + 1] as usize;
+            let embedding_size = num_tokens * self.embedding_dim;
+
+            if offset + embedding_size > embeddings_data.len() {
+                return Err(JsValue::from_str(&format!(
+                    "Not enough embedding data for document {}",
+                    doc_id
+                )));
+            }
+
+            let doc_embeddings = &embeddings_data[offset..offset + embedding_size];
+
+            // Encode with existing codec
+            let (centroid_codes, packed_residuals) = codec.encode_document(doc_embeddings, num_tokens);
+
+            // Add document
+            let doc_idx = self.documents.len();
+            self.documents.push(QuantizedDocument {
+                id: doc_id,
+                centroid_codes,
+                packed_residuals,
+                num_tokens,
+            });
+
+            // Determine which IVF cluster this document belongs to
+            // Use first token as representative (same as build_ivf_index)
+            let first_token = &doc_embeddings[0..self.embedding_dim];
+            let cluster_id = self.find_nearest_ivf_cluster(first_token);
+
+            // Add to deltas instead of modifying base IVF
+            self.ivf_deltas.push(IVFDelta {
+                cluster_id,
+                doc_id: doc_idx,
+            });
+
+            offset += embedding_size;
+        }
+
+        console_log!("   ✅ Added {} documents (total: {} docs, {} deltas)",
+            num_new_docs, self.documents.len(), self.ivf_deltas.len());
+
+        // Check if compaction is needed
+        let delta_ratio = (self.ivf_deltas.len() as f32 / self.base_doc_count.max(1) as f32) * 100.0;
+        if delta_ratio >= self.delta_threshold as f32 {
+            console_log!("   📊 Delta ratio {:.1}% exceeds threshold {}%, triggering compaction...",
+                delta_ratio, self.delta_threshold);
+            self.compact_deltas()?;
+        } else {
+            console_log!("   📊 Delta ratio: {:.1}% (threshold: {}%)", delta_ratio, self.delta_threshold);
+        }
 
         Ok(())
     }
@@ -573,13 +677,24 @@ impl FastPlaidQuantized {
             .map(|(c, _)| *c)
             .collect();
 
-        // Collect candidate documents from top clusters
+        // Collect candidate documents from top clusters (BASE + DELTAS)
         let mut candidate_docs: Vec<usize> = Vec::new();
         let mut cluster_sizes: Vec<usize> = Vec::new();
         for cluster_id in &top_clusters {
-            let cluster_size = self.ivf_clusters[*cluster_id].len();
-            cluster_sizes.push(cluster_size);
+            // Add documents from base IVF
+            let base_size = self.ivf_clusters[*cluster_id].len();
             candidate_docs.extend(&self.ivf_clusters[*cluster_id]);
+
+            // Add documents from deltas
+            let delta_docs: Vec<usize> = self.ivf_deltas
+                .iter()
+                .filter(|delta| delta.cluster_id == *cluster_id)
+                .map(|delta| delta.doc_id)
+                .collect();
+            let delta_size = delta_docs.len();
+            candidate_docs.extend(delta_docs);
+
+            cluster_sizes.push(base_size + delta_size);
         }
 
         // Debug: check for duplicate candidates
@@ -593,8 +708,8 @@ impl FastPlaidQuantized {
             console_log!("⚠️  Warning: {} duplicate candidates found!", original_count - unique_count);
         }
 
-        console_log!("🔍 IVF Search: Probing {} clusters (sizes: {:?}), {} unique candidates out of {} total docs",
-            num_probe_clusters, cluster_sizes, unique_count, self.documents.len());
+        console_log!("🔍 IVF Search: Probing {} clusters (sizes: {:?}), {} unique candidates out of {} total docs ({} in deltas)",
+            num_probe_clusters, cluster_sizes, unique_count, self.documents.len(), self.ivf_deltas.len());
 
         // Use unique candidates only to avoid redundant work
         let candidate_docs = sorted_candidates;
@@ -727,13 +842,23 @@ impl FastPlaidQuantized {
             "Not initialized".to_string()
         };
 
+        let delta_ratio = if self.base_doc_count > 0 {
+            (self.ivf_deltas.len() as f32 / self.base_doc_count as f32) * 100.0
+        } else {
+            0.0
+        };
+
         let info = serde_json::json!({
             "loaded": self.index_loaded,
             "num_documents": self.documents.len(),
+            "base_documents": self.base_doc_count,
+            "pending_deltas": self.ivf_deltas.len(),
+            "delta_ratio_percent": format!("{:.1}", delta_ratio),
             "embedding_dim": self.embedding_dim,
             "quantization": "4-bit residual coding",
             "compression_ratio": "~8x",
             "implementation": compression_info,
+            "incremental_updates": "enabled",
         });
 
         serde_json::to_string(&info)
@@ -747,10 +872,17 @@ impl FastPlaidQuantized {
 
     /// Save the quantized index to binary format
     /// Returns binary data that can be saved to disk
+    /// Note: Automatically compacts deltas before saving for optimal performance
     #[wasm_bindgen]
-    pub fn save_index(&self) -> Result<Vec<u8>, JsValue> {
+    pub fn save_index(&mut self) -> Result<Vec<u8>, JsValue> {
         if !self.index_loaded {
             return Err(JsValue::from_str("No index loaded"));
+        }
+
+        // Compact deltas before saving for optimal load performance
+        if !self.ivf_deltas.is_empty() {
+            console_log!("💾 Compacting {} deltas before save...", self.ivf_deltas.len());
+            self.compact_deltas()?;
         }
 
         let codec = self.codec.as_ref()
@@ -947,8 +1079,50 @@ impl FastPlaidQuantized {
 
         self.index_loaded = true;
 
+        // Initialize delta tracking for loaded index
+        self.base_doc_count = num_docs;
+        self.ivf_deltas.clear();
+
         console_log!("✅ Index loaded successfully!");
         console_log!("   Total size: {:.2} MB", index_bytes.len() as f32 / 1_000_000.0);
+        console_log!("   Ready for incremental updates!");
+
+        Ok(())
+    }
+
+    /// Manually trigger compaction of deltas into base IVF
+    /// Useful for forcing compaction before save or for performance tuning
+    #[wasm_bindgen]
+    pub fn compact_index(&mut self) -> Result<(), JsValue> {
+        if !self.index_loaded {
+            return Err(JsValue::from_str("No index loaded"));
+        }
+        self.compact_deltas()
+    }
+
+    /// Compact deltas into base IVF index
+    /// Merges pending delta additions into the base ivf_clusters
+    fn compact_deltas(&mut self) -> Result<(), JsValue> {
+        if self.ivf_deltas.is_empty() {
+            console_log!("   No deltas to compact");
+            return Ok(());
+        }
+
+        console_log!("   🔨 Compacting {} deltas into base IVF...", self.ivf_deltas.len());
+
+        // Merge deltas into base IVF clusters
+        for delta in &self.ivf_deltas {
+            self.ivf_clusters[delta.cluster_id].push(delta.doc_id);
+        }
+
+        // Clear deltas
+        let num_compacted = self.ivf_deltas.len();
+        self.ivf_deltas.clear();
+
+        // Update base document count
+        self.base_doc_count = self.documents.len();
+
+        console_log!("   ✅ Compacted {} deltas, base now has {} documents", num_compacted, self.base_doc_count);
 
         Ok(())
     }

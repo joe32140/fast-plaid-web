@@ -24,6 +24,11 @@ export class FastPlaidQuantized {
    */
   load_documents_quantized(embeddings_data: Float32Array, doc_info: BigInt64Array, num_centroids?: number | null): void;
   /**
+   * Incrementally add new documents to the index without full rebuild
+   * Uses existing codec to compress new documents and stores IVF updates as deltas
+   */
+  update_index_incremental(embeddings_data: Float32Array, doc_info: BigInt64Array): void;
+  /**
    * Search with quantized embeddings
    */
   search(query_embeddings: Float32Array, query_shape: Uint32Array, top_k: number): string;
@@ -32,12 +37,18 @@ export class FastPlaidQuantized {
   /**
    * Save the quantized index to binary format
    * Returns binary data that can be saved to disk
+   * Note: Automatically compacts deltas before saving for optimal performance
    */
   save_index(): Uint8Array;
   /**
    * Load a precomputed quantized index from binary format
    */
   load_index(index_bytes: Uint8Array): void;
+  /**
+   * Manually trigger compaction of deltas into base IVF
+   * Useful for forcing compaction before save or for performance tuning
+   */
+  compact_index(): void;
 }
 /**
  * WASM wrapper for FastPlaid search functionality
@@ -99,11 +110,13 @@ export interface InitOutput {
   readonly __wbg_fastplaidquantized_free: (a: number, b: number) => void;
   readonly fastplaidquantized_new: () => [number, number, number];
   readonly fastplaidquantized_load_documents_quantized: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+  readonly fastplaidquantized_update_index_incremental: (a: number, b: number, c: number, d: number, e: number) => [number, number];
   readonly fastplaidquantized_search: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
   readonly fastplaidquantized_get_index_info: (a: number) => [number, number, number, number];
   readonly fastplaidquantized_get_num_documents: (a: number) => number;
   readonly fastplaidquantized_save_index: (a: number) => [number, number, number, number];
   readonly fastplaidquantized_load_index: (a: number, b: number, c: number) => [number, number];
+  readonly fastplaidquantized_compact_index: (a: number) => [number, number];
   readonly __wbg_fastplaidwasm_free: (a: number, b: number) => void;
   readonly fastplaidwasm_new: () => [number, number, number];
   readonly fastplaidwasm_load_documents: (a: number, b: number, c: number, d: number, e: number) => [number, number];

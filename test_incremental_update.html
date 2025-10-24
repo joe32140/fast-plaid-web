@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastPlaid Incremental Update Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        h1 { color: #4ec9b0; }
+        h2 { color: #569cd6; margin-top: 30px; }
+        .log {
+            background: #252526;
+            border: 1px solid #3e3e42;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .log-line {
+            margin: 5px 0;
+            font-family: 'Courier New', monospace;
+        }
+        .success { color: #4ec9b0; }
+        .info { color: #569cd6; }
+        .warning { color: #ce9178; }
+        .error { color: #f48771; }
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button:hover { background: #1177bb; }
+        button:disabled {
+            background: #3e3e42;
+            cursor: not-allowed;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: #252526;
+            border: 1px solid #3e3e42;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .stat-label {
+            color: #808080;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        .stat-value {
+            color: #4ec9b0;
+            font-size: 24px;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔄 FastPlaid Incremental Update Test</h1>
+    <p>This demo tests the new delta-encoded IVF incremental update feature.</p>
+
+    <h2>Controls</h2>
+    <div>
+        <button id="btnCreateIndex">1. Create Initial Index (10 docs)</button>
+        <button id="btnAddDocs1" disabled>2. Add 2 More Docs (Incremental)</button>
+        <button id="btnSearch1" disabled>3. Search Index</button>
+        <button id="btnAddDocs2" disabled>4. Add 3 More Docs (Trigger Compaction)</button>
+        <button id="btnSearch2" disabled>5. Search Again</button>
+        <button id="btnCompact" disabled>6. Manual Compact</button>
+        <button id="btnGetInfo" disabled>7. Get Index Info</button>
+    </div>
+
+    <h2>Index Statistics</h2>
+    <div class="stats" id="stats">
+        <div class="stat-card">
+            <div class="stat-label">Total Documents</div>
+            <div class="stat-value" id="statTotalDocs">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Base Documents</div>
+            <div class="stat-value" id="statBaseDocs">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Pending Deltas</div>
+            <div class="stat-value" id="statDeltas">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Delta Ratio</div>
+            <div class="stat-value" id="statDeltaRatio">0%</div>
+        </div>
+    </div>
+
+    <h2>Console Log</h2>
+    <div class="log" id="log"></div>
+
+    <div id="errorBanner" style="display: none; background: #7c1a1a; border: 2px solid #f48771; padding: 15px; margin: 20px 0; border-radius: 4px;">
+        <h3 style="margin: 0 0 10px 0; color: #f48771;">⚠️ Initialization Failed</h3>
+        <p id="errorMessage" style="margin: 0 0 10px 0;"></p>
+        <p style="margin: 0; color: #ce9178;">
+            <strong>Common fixes:</strong><br>
+            • Refresh the page<br>
+            • Close other browser tabs to free memory<br>
+            • Try a different browser (Chrome/Edge recommended)<br>
+            • Disable browser extensions temporarily
+        </p>
+    </div>
+
+    <script type="module">
+        import init, { FastPlaidQuantized } from './docs/pkg/fast_plaid_rust.js';
+
+        let plaid = null;
+        const logDiv = document.getElementById('log');
+        const originalConsoleLog = console.log;
+
+        function log(message, type = 'info') {
+            const line = document.createElement('div');
+            line.className = `log-line ${type}`;
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(line);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            // Use original console.log to avoid recursion
+            originalConsoleLog(message);
+        }
+
+        function updateStats(info) {
+            if (!info) return;
+            document.getElementById('statTotalDocs').textContent = info.num_documents || 0;
+            document.getElementById('statBaseDocs').textContent = info.base_documents || 0;
+            document.getElementById('statDeltas').textContent = info.pending_deltas || 0;
+            document.getElementById('statDeltaRatio').textContent = info.delta_ratio_percent || '0.0' + '%';
+        }
+
+        // Generate fake embeddings for testing
+        function generateEmbeddings(numDocs, dim = 48) {
+            const embeddings = [];
+            const docInfo = [];
+
+            for (let i = 0; i < numDocs; i++) {
+                const numTokens = 10 + Math.floor(Math.random() * 20); // 10-30 tokens
+                docInfo.push(i, numTokens);
+
+                for (let t = 0; t < numTokens; t++) {
+                    for (let d = 0; d < dim; d++) {
+                        // Generate random normalized embeddings
+                        embeddings.push(Math.random() * 2 - 1);
+                    }
+                }
+            }
+
+            return { embeddings: new Float32Array(embeddings), docInfo: new BigInt64Array(docInfo.map(BigInt)) };
+        }
+
+        async function getIndexInfo() {
+            if (!plaid) return null;
+            try {
+                const infoStr = plaid.get_index_info();
+                return JSON.parse(infoStr);
+            } catch (e) {
+                log(`Error getting index info: ${e}`, 'error');
+                return null;
+            }
+        }
+
+        // Retry helper with exponential backoff
+        async function retryAsync(fn, maxRetries = 3, delayMs = 500) {
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    return await fn();
+                } catch (error) {
+                    log(`⚠️  Attempt ${attempt}/${maxRetries} failed: ${error.message}`, 'warning');
+
+                    if (attempt === maxRetries) {
+                        log('❌ Failed after all retries', 'error');
+                        log('💡 Try refreshing the page or closing other tabs to free memory', 'info');
+                        throw error;
+                    }
+
+                    // Exponential backoff
+                    const delay = delayMs * Math.pow(2, attempt - 1);
+                    log(`   Retrying in ${delay}ms...`, 'info');
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+        // Initialize WASM with retry logic
+        log('Initializing WASM module...', 'info');
+        try {
+            await retryAsync(async () => {
+                await init();
+            }, 3, 500);
+            log('✅ WASM module loaded successfully', 'success');
+        } catch (error) {
+            log(`❌ Failed to initialize WASM: ${error.message}`, 'error');
+
+            // Show error banner
+            const errorBanner = document.getElementById('errorBanner');
+            const errorMessage = document.getElementById('errorMessage');
+            errorMessage.textContent = `Error: ${error.message}`;
+            errorBanner.style.display = 'block';
+
+            // Disable all buttons
+            document.querySelectorAll('button').forEach(btn => btn.disabled = true);
+
+            throw error; // Prevent button handlers from setting up
+        }
+
+        // Button handlers
+        document.getElementById('btnCreateIndex').addEventListener('click', async () => {
+            try {
+                log('Creating initial index with 10 documents...', 'info');
+                plaid = new FastPlaidQuantized();
+
+                const { embeddings, docInfo } = generateEmbeddings(10);
+                plaid.load_documents_quantized(embeddings, docInfo, 256);
+
+                log('✅ Initial index created!', 'success');
+                const info = await getIndexInfo();
+                updateStats(info);
+
+                document.getElementById('btnAddDocs1').disabled = false;
+                document.getElementById('btnSearch1').disabled = false;
+                document.getElementById('btnGetInfo').disabled = false;
+            } catch (e) {
+                log(`❌ Error: ${e}`, 'error');
+            }
+        });
+
+        document.getElementById('btnAddDocs1').addEventListener('click', async () => {
+            try {
+                log('Adding 2 documents incrementally...', 'info');
+                const { embeddings, docInfo } = generateEmbeddings(2);
+
+                // Offset doc IDs
+                for (let i = 0; i < docInfo.length; i += 2) {
+                    docInfo[i] = docInfo[i] + BigInt(10);
+                }
+
+                plaid.update_index_incremental(embeddings, docInfo);
+                log('✅ 2 documents added!', 'success');
+
+                const info = await getIndexInfo();
+                updateStats(info);
+                log(`Delta ratio: ${info.delta_ratio_percent}% (threshold: 10%)`, 'info');
+
+                document.getElementById('btnAddDocs2').disabled = false;
+            } catch (e) {
+                log(`❌ Error: ${e}`, 'error');
+            }
+        });
+
+        document.getElementById('btnSearch1').addEventListener('click', async () => {
+            try {
+                log('Searching index (with deltas)...', 'info');
+                const { embeddings } = generateEmbeddings(1);
+                const queryShape = new Uint32Array([1, 15, 48]); // 1 query, 15 tokens, 48 dims
+
+                const resultsStr = plaid.search(embeddings.slice(0, 15 * 48), queryShape, 5);
+                const results = JSON.parse(resultsStr);
+
+                log(`✅ Search complete! Found ${results[0].passage_ids.length} results`, 'success');
+                log(`   Candidates searched: ${results[0].candidates_searched}`, 'info');
+                log(`   Top result: doc ${results[0].passage_ids[0]} (score: ${results[0].scores[0].toFixed(4)})`, 'info');
+
+                document.getElementById('btnSearch2').disabled = false;
+            } catch (e) {
+                log(`❌ Error: ${e}`, 'error');
+            }
+        });
+
+        document.getElementById('btnAddDocs2').addEventListener('click', async () => {
+            try {
+                log('Adding 3 more documents (should trigger compaction at >10% delta ratio)...', 'warning');
+                const { embeddings, docInfo } = generateEmbeddings(3);
+
+                // Offset doc IDs
+                for (let i = 0; i < docInfo.length; i += 2) {
+                    docInfo[i] = docInfo[i] + BigInt(12);
+                }
+
+                plaid.update_index_incremental(embeddings, docInfo);
+                log('✅ 3 documents added!', 'success');
+
+                const info = await getIndexInfo();
+                updateStats(info);
+                log(`Delta ratio after addition: ${info.delta_ratio_percent}%`, 'info');
+
+                document.getElementById('btnCompact').disabled = false;
+            } catch (e) {
+                log(`❌ Error: ${e}`, 'error');
+            }
+        });
+
+        document.getElementById('btnSearch2').addEventListener('click', async () => {
+            try {
+                log('Searching updated index...', 'info');
+                const { embeddings } = generateEmbeddings(1);
+                const queryShape = new Uint32Array([1, 15, 48]);
+
+                const resultsStr = plaid.search(embeddings.slice(0, 15 * 48), queryShape, 5);
+                const results = JSON.parse(resultsStr);
+
+                log(`✅ Search complete! Found ${results[0].passage_ids.length} results`, 'success');
+                log(`   Candidates searched: ${results[0].candidates_searched}`, 'info');
+                log(`   Top 3 results: ${results[0].passage_ids.slice(0, 3).join(', ')}`, 'info');
+            } catch (e) {
+                log(`❌ Error: ${e}`, 'error');
+            }
+        });
+
+        document.getElementById('btnCompact').addEventListener('click', async () => {
+            try {
+                log('Manually compacting index...', 'info');
+                plaid.compact_index();
+                log('✅ Index compacted!', 'success');
+
+                const info = await getIndexInfo();
+                updateStats(info);
+            } catch (e) {
+                log(`❌ Error: ${e}`, 'error');
+            }
+        });
+
+        document.getElementById('btnGetInfo').addEventListener('click', async () => {
+            try {
+                const info = await getIndexInfo();
+                log('📊 Index Information:', 'info');
+                log(JSON.stringify(info, null, 2), 'info');
+                updateStats(info);
+            } catch (e) {
+                log(`❌ Error: ${e}`, 'error');
+            }
+        });
+
+        // Intercept console.log to show WASM messages in our log div
+        console.log = function(...args) {
+            originalConsoleLog.apply(console, args);
+            const message = args.join(' ');
+
+            // Only intercept WASM-related messages to avoid recursion
+            if (message.includes('✅') ||
+                message.includes('⚠️') ||
+                message.includes('🔍') ||
+                message.includes('📊') ||
+                message.includes('🔨') ||
+                message.includes('Warning')) {
+
+                // Determine type based on content
+                let type = 'info';
+                if (message.includes('✅')) type = 'success';
+                else if (message.includes('⚠️') || message.includes('Warning')) type = 'warning';
+                else if (message.includes('❌')) type = 'error';
+
+                // Add to log without calling console.log again
+                const line = document.createElement('div');
+                line.className = `log-line ${type}`;
+                line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+                logDiv.appendChild(line);
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+        };
+    </script>
+</body>
+</html>
