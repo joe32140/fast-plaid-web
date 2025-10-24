@@ -1,0 +1,15 @@
+{
+  "name": "fast_plaid_rust",
+  "type": "module",
+  "version": "1.2.4",
+  "files": [
+    "fast_plaid_rust_bg.wasm",
+    "fast_plaid_rust.js",
+    "fast_plaid_rust.d.ts"
+  ],
+  "main": "fast_plaid_rust.js",
+  "types": "fast_plaid_rust.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
