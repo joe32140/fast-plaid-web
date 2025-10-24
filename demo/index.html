@@ -290,7 +290,7 @@
         <div class="search-panel">
             <h2 style="margin-bottom: 15px;">🔍 Search Research Papers</h2>
             <div class="search-controls">
-                <input type="text" id="queryInput" placeholder="Enter your search query (e.g., 'machine learning for NLP')" />
+                <input type="text" id="queryInput" placeholder="Simple Projection Variants Improve ColBERT Performance" />
                 <button class="btn btn-primary" id="searchBtn">Search Both</button>
             </div>
         </div>
@@ -632,7 +632,7 @@
             const errors = [direct.error, fastplaid.error, colbert.error].filter(Boolean).length;
 
             if (loaded === 3) {
-                showStatus(`✅ All systems ready! Try: "transformer attention mechanisms"`, 'success');
+                showStatus(`✅ All systems ready! Try: "Simple Projection Variants Improve ColBERT Performance"`, 'success');
                 document.getElementById('searchBtn').disabled = false;
             } else if (errors > 0 && loading === 0) {
                 let msg = '⚠️ Partial system ready. ';
