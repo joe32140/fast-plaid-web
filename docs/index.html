@@ -161,7 +161,7 @@
 
         .comparison-panel {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 20px;
         }
 
@@ -264,11 +264,13 @@
             border: 1px solid #f5c6cb;
         }
 
-        @media (max-width: 768px) {
+        @media (max-width: 1200px) {
             .comparison-panel {
                 grid-template-columns: 1fr;
             }
+        }
 
+        @media (max-width: 768px) {
             .search-controls {
                 flex-direction: column;
             }
@@ -291,9 +293,9 @@
 
     <div class="container">
         <div class="header">
-            <h1>🆚 Direct MaxSim vs FastPlaid</h1>
+            <h1>🆚 Direct MaxSim vs WASM MaxSim vs FastPlaid</h1>
             <p>Search 1000 arXiv Papers with <a href="https://huggingface.co/mixedbread-ai/mxbai-edge-colbert-v0-17m" target="_blank" style="color: white; font-weight: bold; text-decoration: underline;">mixedbread-ai/mxbai-edge-colbert-v0-17m</a></p>
-            <p style="font-size: 16px; margin-top: 5px; opacity: 0.8;">Float32 vs 4-bit Quantized ColBERT (48-dim)</p>
+            <p style="font-size: 16px; margin-top: 5px; opacity: 0.8;">JS MaxSim vs WASM+SIMD MaxSim vs 4-bit Quantized FastPlaid (48-dim)</p>
         </div>
 
         <!-- Stats Panel -->
@@ -306,7 +308,11 @@
                 </div>
                 <div class="stat-card orange">
                     <div class="stat-value" id="directSize">-</div>
-                    <div class="stat-label">Direct MaxSim (float32)</div>
+                    <div class="stat-label">JS MaxSim (float32)</div>
+                </div>
+                <div class="stat-card" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                    <div class="stat-value" id="wasmSize">-</div>
+                    <div class="stat-label">WASM MaxSim (float32)</div>
                 </div>
                 <div class="stat-card green">
                     <div class="stat-value" id="fastplaidSize">-</div>
@@ -325,7 +331,7 @@
             <h2 style="margin-bottom: 15px;">🔍 Search Research Papers</h2>
             <div class="search-controls">
                 <input type="text" id="queryInput" value="Simple Projection Variants Improve ColBERT Performance" />
-                <button class="btn btn-primary" id="searchBtn">Search Both</button>
+                <button class="btn btn-primary" id="searchBtn">Search All</button>
             </div>
         </div>
 
@@ -334,14 +340,27 @@
             <!-- Direct MaxSim Results -->
             <div class="method-panel">
                 <div class="method-header">
-                    <div class="method-title">🐢 Direct MaxSim</div>
+                    <div class="method-title">🐢 JS MaxSim</div>
                     <div class="method-time" id="directTime">- ms</div>
                 </div>
                 <div class="method-description">
-                    <strong>Float32 embeddings</strong><br>
+                    <strong>Float32 embeddings (JS)</strong><br>
                     Full precision, searches all 1000 papers
                 </div>
                 <div id="directResults"></div>
+            </div>
+
+            <!-- WASM MaxSim Results -->
+            <div class="method-panel">
+                <div class="method-header">
+                    <div class="method-title">🚀 WASM MaxSim</div>
+                    <div class="method-time" id="wasmTime">- ms</div>
+                </div>
+                <div class="method-description">
+                    <strong>Float32 embeddings (WASM+SIMD)</strong><br>
+                    Full precision, searches all 1000 papers
+                </div>
+                <div id="wasmResults"></div>
             </div>
 
             <!-- FastPlaid Results -->
@@ -362,10 +381,12 @@
     <script type="module">
         import init, { FastPlaidQuantized } from './pkg/fast_plaid_rust.js';
         import { PrecomputedIndexLoader } from './precomputed-index-loader.js';
+        import { MaxSimWasm } from './maxsim-wasm.js';
 
         let indexLoader = null;
         let directEmbeddings = null;
         let fastPlaidWasm = null;  // WASM instance
+        let wasmMaxSim = null;  // WASM MaxSim instance
         let papers = null;
         let colbertModel = null;
 
@@ -389,9 +410,10 @@
             console.log('✅ Downloaded index.fastplaid! Move to demo/data/');
         };
 
-        // Loading state management for both indexes
+        // Loading state management for all three methods
         const loadingState = {
             directMaxSim: { loaded: false, loading: false, error: null },
+            wasmMaxSim: { loaded: false, loading: false, error: null },
             fastPlaid: { loaded: false, loading: false, error: null },
             colbert: { loaded: false, loading: false, error: null }
         };
@@ -399,6 +421,7 @@
         // Update UI to show loading state
         function updateLoadingUI(customMessage = null) {
             const directSize = document.getElementById('directSize');
+            const wasmSize = document.getElementById('wasmSize');
             const fastplaidSize = document.getElementById('fastplaidSize');
 
             // Direct MaxSim size box
@@ -410,6 +433,17 @@
                 directSize.textContent = '49.5 MB';
             } else {
                 directSize.textContent = '-';
+            }
+
+            // WASM MaxSim size box (same data as Direct MaxSim)
+            if (loadingState.wasmMaxSim.loading) {
+                wasmSize.innerHTML = '<span style="font-size:20px;">⏳</span> Loading...';
+            } else if (loadingState.wasmMaxSim.error) {
+                wasmSize.innerHTML = '<span style="font-size:20px;">❌</span> Error';
+            } else if (loadingState.wasmMaxSim.loaded) {
+                wasmSize.textContent = '49.5 MB';
+            } else {
+                wasmSize.textContent = '-';
             }
 
             // FastPlaid size box (with custom message support)
@@ -458,6 +492,48 @@
             }
         }
 
+        // Load WASM MaxSim
+        async function loadWasmMaxSim() {
+            loadingState.wasmMaxSim.loading = true;
+            updateLoadingUI();
+
+            try {
+                console.log('🚀 Loading WASM MaxSim (with preloading support)...');
+                showStatus('Loading WASM MaxSim...', 'info');
+
+                // Create and initialize WASM instance with wrapper
+                wasmMaxSim = new MaxSimWasm();
+                await wasmMaxSim.init();
+
+                loadingState.wasmMaxSim.loaded = true;
+                loadingState.wasmMaxSim.loading = false;
+                updateLoadingUI();
+
+                console.log('✅ WASM MaxSim loaded with preloading support!');
+                console.log('   Info:', wasmMaxSim.getInfo());
+
+                // Check if SIMD is actually supported
+                const simdSupported = await WebAssembly.validate(new Uint8Array([
+                    0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3,
+                    2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11
+                ]));
+                console.log('   🔍 Browser SIMD support:', simdSupported ? '✅ YES' : '❌ NO');
+
+                if (!simdSupported) {
+                    console.warn('⚠️ WASM SIMD NOT SUPPORTED - WASM will be slow!');
+                    console.warn('   Use Chrome 91+, Firefox 89+, or Safari 16.4+');
+                }
+
+                updateOverallStatus();
+            } catch (error) {
+                console.error('❌ Error loading WASM MaxSim:', error);
+                loadingState.wasmMaxSim.error = error.message;
+                loadingState.wasmMaxSim.loading = false;
+                updateLoadingUI();
+                updateOverallStatus();
+            }
+        }
+
         // Load Direct MaxSim embeddings (async, independent)
         async function loadDirectMaxSimIndex() {
             loadingState.directMaxSim.loading = true;
@@ -470,11 +546,54 @@
                 const directData = await indexLoader.loadDirectMaxSimEmbeddings();
                 directEmbeddings = directData.embeddings;
 
+                console.log('✅ Direct MaxSim embeddings loaded (flat Float32Array format)');
+                console.log('   Ready for both JS MaxSim and WASM Flat API');
+
+                // Wait for WASM MaxSim to be ready before preloading
+                console.log('⏳ Waiting for WASM MaxSim to initialize before preloading...');
+                while (!loadingState.wasmMaxSim.loaded && !loadingState.wasmMaxSim.error) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+
+                // Preload documents into WASM MaxSim if it's ready
+                if (wasmMaxSim && loadingState.wasmMaxSim.loaded) {
+                    console.log('🔄 Preloading documents into WASM MaxSim...');
+                    try {
+                        const embeddingDim = 48; // Known from our data
+
+                        // Prepare flat embeddings data and doc_tokens array
+                        const docTokens = new Uint32Array(directEmbeddings.length);
+                        let totalTokens = 0;
+
+                        for (let i = 0; i < directEmbeddings.length; i++) {
+                            docTokens[i] = directEmbeddings[i].numTokens;
+                            totalTokens += directEmbeddings[i].numTokens;
+                        }
+
+                        // Concatenate all embeddings into one flat array
+                        const allEmbeddings = new Float32Array(totalTokens * embeddingDim);
+                        let offset = 0;
+                        for (let i = 0; i < directEmbeddings.length; i++) {
+                            const docEmb = directEmbeddings[i].embedding;
+                            allEmbeddings.set(docEmb, offset);
+                            offset += docEmb.length;
+                        }
+
+                        wasmMaxSim.loadDocuments(allEmbeddings, docTokens, embeddingDim);
+                        console.log(`✅ Preloaded ${directEmbeddings.length} documents into WASM memory!`);
+                        console.log(`   Total tokens: ${totalTokens}, Data size: ${(allEmbeddings.length * 4 / 1024).toFixed(1)} KB`);
+                        console.log('   Future searches will have ZERO conversion overhead!');
+                    } catch (error) {
+                        console.warn('⚠️ Failed to preload documents:', error);
+                        console.warn('   Will fall back to per-search conversion');
+                    }
+                } else {
+                    console.warn('⚠️ WASM MaxSim not available - skipping preload');
+                }
+
                 loadingState.directMaxSim.loaded = true;
                 loadingState.directMaxSim.loading = false;
                 updateLoadingUI();
-
-                console.log('✅ Direct MaxSim embeddings loaded!');
                 updateOverallStatus();
             } catch (error) {
                 console.error('❌ Error loading Direct MaxSim:', error);
@@ -657,31 +776,34 @@
         // Update overall status message
         function updateOverallStatus() {
             const direct = loadingState.directMaxSim;
+            const wasm = loadingState.wasmMaxSim;
             const fastplaid = loadingState.fastPlaid;
             const colbert = loadingState.colbert;
 
             // Count loaded, loading, errored
-            const loaded = [direct.loaded, fastplaid.loaded, colbert.loaded].filter(Boolean).length;
-            const loading = [direct.loading, fastplaid.loading, colbert.loading].filter(Boolean).length;
-            const errors = [direct.error, fastplaid.error, colbert.error].filter(Boolean).length;
+            const loaded = [direct.loaded, wasm.loaded, fastplaid.loaded, colbert.loaded].filter(Boolean).length;
+            const loading = [direct.loading, wasm.loading, fastplaid.loading, colbert.loading].filter(Boolean).length;
+            const errors = [direct.error, wasm.error, fastplaid.error, colbert.error].filter(Boolean).length;
 
-            if (loaded === 3) {
+            if (loaded === 4) {
                 showStatus(`✅ All systems ready! Try: "Simple Projection Variants Improve ColBERT Performance"`, 'success');
                 document.getElementById('searchBtn').disabled = false;
             } else if (errors > 0 && loading === 0) {
                 let msg = '⚠️ Partial system ready. ';
-                if (direct.loaded) msg += 'Direct MaxSim: ✅ ';
+                if (direct.loaded) msg += 'JS MaxSim: ✅ ';
+                if (wasm.loaded) msg += 'WASM MaxSim: ✅ ';
                 if (fastplaid.loaded) msg += 'FastPlaid: ✅ ';
                 if (colbert.loaded) msg += 'ColBERT: ✅';
                 showStatus(msg, 'info');
 
                 // Enable search if at least one index and colbert are ready
-                if (colbert.loaded && (direct.loaded || fastplaid.loaded)) {
+                if (colbert.loaded && (direct.loaded || wasm.loaded || fastplaid.loaded)) {
                     document.getElementById('searchBtn').disabled = false;
                 }
             } else if (loading > 0) {
                 let msg = '⏳ Loading... ';
-                if (direct.loading) msg += 'Direct MaxSim... ';
+                if (direct.loading) msg += 'JS MaxSim... ';
+                if (wasm.loading) msg += 'WASM MaxSim... ';
                 if (fastplaid.loading) msg += 'FastPlaid... ';
                 if (colbert.loading) msg += 'ColBERT... ';
                 showStatus(msg, 'info');
@@ -705,6 +827,7 @@
                 // Start loading all indexes in parallel (truly independent)
                 Promise.all([
                     loadDirectMaxSimIndex(),
+                    loadWasmMaxSim(),
                     loadFastPlaidIndex(),
                     loadColBertModel()
                 ]).catch(err => {
@@ -742,7 +865,7 @@
             return totalScore;
         }
 
-        // Direct MaxSim search
+        // Direct MaxSim search (JS implementation)
         function searchDirectMaxSim(queryEmb, numQueryTokens, embeddingDim, topK) {
             const scores = [];
 
@@ -750,6 +873,89 @@
                 const docEmb = directEmbeddings[docId];
                 const score = maxSim(queryEmb, docEmb.embedding, numQueryTokens, docEmb.numTokens, embeddingDim);
                 scores.push({ docId, score });
+            }
+
+            // Sort by score and return top-K
+            scores.sort((a, b) => b.score - a.score);
+            return scores.slice(0, topK).map(s => ({
+                paper: papers[s.docId],
+                score: s.score
+            }));
+        }
+
+        // WASM MaxSim search with preloading (ZERO conversion overhead!)
+        function searchWasmMaxSim(queryEmb, numQueryTokens, embeddingDim, topK) {
+            const t0 = performance.now();
+
+            console.log('🔍 WASM MaxSim Search (Preloaded):');
+            console.log('  Query tokens:', numQueryTokens, 'Embedding dim:', embeddingDim);
+            console.log('  Preloaded docs:', typeof wasmMaxSim.numDocumentsLoaded === 'function' ? wasmMaxSim.numDocumentsLoaded() : 'N/A (old WASM)');
+
+            // Check if documents are preloaded (with safety check for method availability)
+            const usePreloaded = (typeof wasmMaxSim.numDocumentsLoaded === 'function') &&
+                                  wasmMaxSim.numDocumentsLoaded() > 0;
+
+            let batchScores;
+            if (usePreloaded) {
+                // ULTRA-FAST PATH: Use preloaded documents (ZERO conversion overhead!)
+                console.log('  ⚡ Using preloaded documents - NO conversion overhead!');
+
+                // Convert flat query to 2D format for searchPreloaded()
+                const query2D = [];
+                for (let i = 0; i < numQueryTokens; i++) {
+                    const tokenStart = i * embeddingDim;
+                    query2D.push(queryEmb.slice(tokenStart, tokenStart + embeddingDim));
+                }
+
+                const t1 = performance.now();
+                batchScores = wasmMaxSim.searchPreloaded(query2D);
+                const wasmTime = performance.now() - t1;
+
+                console.log('  ✨ Search time (preloaded):', wasmTime.toFixed(1), 'ms');
+                console.log('  Avg time per doc:', (wasmTime / batchScores.length).toFixed(3), 'ms');
+                console.log('  Total time:', (performance.now() - t0).toFixed(1), 'ms');
+            } else {
+                // FALLBACK PATH: Documents not preloaded, use old method
+                console.log('  ⚠️ Documents not preloaded - using fallback (with conversion overhead)');
+
+                const t1 = performance.now();
+
+                let totalDocTokens = 0;
+                const docTokenCounts = new Uint32Array(directEmbeddings.length);
+                for (let i = 0; i < directEmbeddings.length; i++) {
+                    docTokenCounts[i] = directEmbeddings[i].numTokens;
+                    totalDocTokens += directEmbeddings[i].numTokens;
+                }
+
+                const allDocsFlat = new Float32Array(totalDocTokens * embeddingDim);
+                let offset = 0;
+                for (let i = 0; i < directEmbeddings.length; i++) {
+                    const docEmb = directEmbeddings[i].embedding;
+                    allDocsFlat.set(docEmb, offset);
+                    offset += docEmb.length;
+                }
+
+                const packTime = performance.now() - t1;
+                console.log('  Data packing time:', packTime.toFixed(1), 'ms');
+
+                const t2 = performance.now();
+                batchScores = wasmMaxSim.wasmInstance.maxsim_batch(
+                    queryEmb,
+                    numQueryTokens,
+                    allDocsFlat,
+                    docTokenCounts,
+                    embeddingDim
+                );
+                const wasmTime = performance.now() - t2;
+
+                console.log('  WASM time:', wasmTime.toFixed(1), 'ms');
+                console.log('  Total time (packing + WASM):', (performance.now() - t0).toFixed(1), 'ms');
+            }
+
+            // Convert batch scores to result format
+            const scores = [];
+            for (let docId = 0; docId < directEmbeddings.length; docId++) {
+                scores.push({ docId, score: batchScores[docId] });
             }
 
             // Sort by score and return top-K
@@ -800,8 +1006,8 @@
             }
 
             // Check if at least one index is ready
-            if (!loadingState.directMaxSim.loaded && !loadingState.fastPlaid.loaded) {
-                showStatus('⏳ Both indexes are still loading, please wait...', 'info');
+            if (!loadingState.directMaxSim.loaded && !loadingState.wasmMaxSim.loaded && !loadingState.fastPlaid.loaded) {
+                showStatus('⏳ All indexes are still loading, please wait...', 'info');
                 return;
             }
 
@@ -818,11 +1024,13 @@
                 console.log('🔍 Query:', query);
                 console.log('   Tokens:', numQueryTokens, 'Dim:', embeddingDim);
 
-                // Search with both methods (only if loaded)
+                // Search with all three methods (only if loaded)
                 showStatus('Searching...', 'info');
 
                 let directResults = null;
                 let directTime = null;
+                let wasmResults = null;
+                let wasmTime = null;
                 let fastplaidResult = null;
                 let fastplaidTime = null;
 
@@ -831,9 +1039,29 @@
                     const directStart = performance.now();
                     directResults = searchDirectMaxSim(queryEmb, numQueryTokens, embeddingDim, 10);
                     directTime = performance.now() - directStart;
-                    console.log('✅ Direct MaxSim:', directResults.length, 'results in', directTime.toFixed(1), 'ms (all', papers.length, 'papers)');
+                    console.log('✅ JS MaxSim:', directResults.length, 'results in', directTime.toFixed(1), 'ms (all', papers.length, 'papers)');
                 } else {
-                    console.log('⏳ Direct MaxSim: Not loaded yet');
+                    console.log('⏳ JS MaxSim: Not loaded yet');
+                }
+
+                // WASM MaxSim: Exhaustive search over all papers using WASM (if loaded)
+                if (loadingState.wasmMaxSim.loaded && loadingState.directMaxSim.loaded) {
+                    console.log('🔍 Pre-WASM check:');
+                    console.log('  queryEmb type:', queryEmb.constructor.name);
+                    console.log('  queryEmb length:', queryEmb.length);
+                    console.log('  Expected length (tokens * dim):', numQueryTokens * embeddingDim);
+                    console.log('  First 5 values:', Array.from(queryEmb.slice(0, 5)));
+
+                    const wasmStart = performance.now();
+                    wasmResults = searchWasmMaxSim(queryEmb, numQueryTokens, embeddingDim, 10);
+                    wasmTime = performance.now() - wasmStart;
+                    console.log('✅ WASM MaxSim:', wasmResults.length, 'results in', wasmTime.toFixed(1), 'ms (all', papers.length, 'papers)');
+                    if (directTime !== null) {
+                        const speedup = (directTime / wasmTime).toFixed(1);
+                        console.log(`   ⚡ Speedup: ${speedup}x faster than JS MaxSim`);
+                    }
+                } else {
+                    console.log('⏳ WASM MaxSim: Not loaded yet');
                 }
 
                 // FastPlaid: Using WASM's 4-bit quantized index with IVF clustering (if loaded)
@@ -855,6 +1083,7 @@
                 // Display results (partial or full)
                 displayResults(
                     directResults ? { results: directResults, searchTime: directTime } : null,
+                    wasmResults ? { results: wasmResults, searchTime: wasmTime } : null,
                     fastplaidResult ? {
                         results: fastplaidResult.results,
                         searchTime: fastplaidTime,
@@ -867,49 +1096,54 @@
                 document.getElementById('comparisonPanel').style.display = 'grid';
 
                 // Show status message
-                if (directResults && fastplaidResult) {
-                    const speedupCalc = (directTime / fastplaidTime).toFixed(1);
-                    const directSizeMB = 49.5;
-                    const fastplaidSizeMB = 6.2;
-                    const compression = (directSizeMB / fastplaidSizeMB).toFixed(1);
-                    const searchPercent = (fastplaidResult.candidatesSearched / papers.length * 100).toFixed(0);
-                    showStatus(
-                        `✅ FastPlaid: ${compression}x smaller, ${speedupCalc}x faster! ` +
-                        `(IVF: ${fastplaidResult.numClustersProbed} clusters → ${searchPercent}% of papers searched)`,
-                        'success'
-                    );
-                } else if (directResults) {
-                    showStatus(`✅ Direct MaxSim results shown (FastPlaid still loading)`, 'info');
-                } else if (fastplaidResult) {
-                    showStatus(`✅ FastPlaid results shown (Direct MaxSim still loading)`, 'info');
+                let statusMsg = '✅ Search complete! ';
+                if (wasmTime && directTime) {
+                    const wasmSpeedup = (directTime / wasmTime).toFixed(1);
+                    statusMsg += `WASM ${wasmSpeedup}x faster than JS. `;
                 }
+                if (fastplaidTime && directTime) {
+                    const fastplaidSpeedup = (directTime / fastplaidTime).toFixed(1);
+                    statusMsg += `FastPlaid ${fastplaidSpeedup}x faster than JS. `;
+                }
+                if (fastplaidResult) {
+                    const searchPercent = (fastplaidResult.candidatesSearched / papers.length * 100).toFixed(0);
+                    statusMsg += `(FastPlaid searched ${searchPercent}% of papers via IVF)`;
+                }
+                showStatus(statusMsg, 'success');
 
             } catch (error) {
                 console.error('Search error:', error);
                 showStatus(`❌ Search error: ${error.message}`, 'error');
             } finally {
                 // Re-enable search button if at least one index is ready
-                if (loadingState.colbert.loaded && (loadingState.directMaxSim.loaded || loadingState.fastPlaid.loaded)) {
+                if (loadingState.colbert.loaded && (loadingState.directMaxSim.loaded || loadingState.wasmMaxSim.loaded || loadingState.fastPlaid.loaded)) {
                     document.getElementById('searchBtn').disabled = false;
                 }
             }
         }
 
-        function displayResults(directResults, fastplaidResults) {
+        function displayResults(directResults, wasmResults, fastplaidResults) {
             // Update IVF statistics (if FastPlaid results available)
             if (fastplaidResults) {
                 document.getElementById('clustersProbed').textContent = fastplaidResults.numClustersProbed || '~6';
                 document.getElementById('candidatesCount').textContent = fastplaidResults.candidatesSearched || '~300';
             }
 
-            // Update Direct MaxSim panel
+            // Determine fastest time for comparison
+            const times = [
+                directResults?.searchTime,
+                wasmResults?.searchTime,
+                fastplaidResults?.searchTime
+            ].filter(t => t !== undefined && t !== null);
+            const fastestTime = times.length > 0 ? Math.min(...times) : null;
+
+            // Update JS MaxSim panel
             const directTimeEl = document.getElementById('directTime');
             const directDiv = document.getElementById('directResults');
 
             if (directResults) {
-                // Show results
                 directTimeEl.textContent = `${directResults.searchTime.toFixed(1)} ms`;
-                directTimeEl.className = 'method-time ' + (fastplaidResults && directResults.searchTime > fastplaidResults.searchTime ? 'slow' : 'fast');
+                directTimeEl.className = 'method-time ' + (fastestTime && directResults.searchTime > fastestTime * 1.1 ? 'slow' : 'fast');
 
                 directDiv.innerHTML = directResults.results.map((result, idx) => `
                     <div class="result-item">
@@ -919,10 +1153,30 @@
                     </div>
                 `).join('');
             } else {
-                // Show loading indicator
                 directTimeEl.textContent = '⏳ Loading...';
                 directTimeEl.className = 'method-time';
-                directDiv.innerHTML = '<div class="status-message status-info">⏳ Direct MaxSim index is still loading. Results will appear when ready.</div>';
+                directDiv.innerHTML = '<div class="status-message status-info">⏳ JS MaxSim index is still loading. Results will appear when ready.</div>';
+            }
+
+            // Update WASM MaxSim panel
+            const wasmTimeEl = document.getElementById('wasmTime');
+            const wasmDiv = document.getElementById('wasmResults');
+
+            if (wasmResults) {
+                wasmTimeEl.textContent = `${wasmResults.searchTime.toFixed(1)} ms`;
+                wasmTimeEl.className = 'method-time ' + (fastestTime && wasmResults.searchTime > fastestTime * 1.1 ? 'slow' : 'fast');
+
+                wasmDiv.innerHTML = wasmResults.results.map((result, idx) => `
+                    <div class="result-item">
+                        <div class="result-title">${idx + 1}. ${result.paper.title}</div>
+                        <div class="result-score">Score: ${result.score.toFixed(4)} | ID: ${result.paper.id}</div>
+                        <div class="result-abstract">${result.paper.abstract.substring(0, 150)}...</div>
+                    </div>
+                `).join('');
+            } else {
+                wasmTimeEl.textContent = '⏳ Loading...';
+                wasmTimeEl.className = 'method-time';
+                wasmDiv.innerHTML = '<div class="status-message status-info">⏳ WASM MaxSim index is still loading. Results will appear when ready.</div>';
             }
 
             // Update FastPlaid panel
@@ -930,9 +1184,8 @@
             const fastplaidDiv = document.getElementById('fastplaidResults');
 
             if (fastplaidResults) {
-                // Show results
                 fastplaidTimeEl.textContent = `${fastplaidResults.searchTime.toFixed(1)} ms`;
-                fastplaidTimeEl.className = 'method-time ' + (directResults && fastplaidResults.searchTime < directResults.searchTime ? 'fast' : 'slow');
+                fastplaidTimeEl.className = 'method-time ' + (fastestTime && fastplaidResults.searchTime > fastestTime * 1.1 ? 'slow' : 'fast');
 
                 fastplaidDiv.innerHTML = fastplaidResults.results.map((result, idx) => `
                     <div class="result-item">
@@ -942,7 +1195,6 @@
                     </div>
                 `).join('');
             } else {
-                // Show loading indicator
                 fastplaidTimeEl.textContent = '⏳ Loading...';
                 fastplaidTimeEl.className = 'method-time';
                 fastplaidDiv.innerHTML = '<div class="status-message status-info">⏳ FastPlaid index is still loading. Results will appear when ready.</div>';
