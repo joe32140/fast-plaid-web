@@ -15,7 +15,7 @@ export class MaxSimWasm {
    */
   maxsim_single_normalized(query_flat: Float32Array, query_tokens: number, doc_flat: Float32Array, doc_tokens: number, embedding_dim: number): number;
   /**
-   * Official MaxSim batch: raw sum with cosine similarity
+   * Official MaxSim batch: raw sum with dot product
    */
   maxsim_batch(query_flat: Float32Array, query_tokens: number, doc_flat: Float32Array, doc_tokens: Uint32Array, embedding_dim: number): Float32Array;
   /**
@@ -23,7 +23,7 @@ export class MaxSimWasm {
    */
   maxsim_batch_normalized(query_flat: Float32Array, query_tokens: number, doc_flat: Float32Array, doc_tokens: Uint32Array, embedding_dim: number): Float32Array;
   /**
-   * Official MaxSim batch uniform: raw sum with cosine similarity
+   * Official MaxSim batch uniform: raw sum with dot product
    */
   maxsim_batch_uniform(query_flat: Float32Array, query_tokens: number, doc_flat: Float32Array, num_docs: number, doc_tokens: number, embedding_dim: number): Float32Array;
   /**
@@ -31,7 +31,7 @@ export class MaxSimWasm {
    */
   maxsim_batch_uniform_normalized(query_flat: Float32Array, query_tokens: number, doc_flat: Float32Array, num_docs: number, doc_tokens: number, embedding_dim: number): Float32Array;
   /**
-   * Official MaxSim batch zero-copy: raw sum with cosine similarity
+   * Official MaxSim batch zero-copy: raw sum with dot product
    */
   maxsim_batch_zero_copy(query_ptr: number, query_tokens: number, doc_ptr: number, doc_tokens_ptr: number, num_docs: number, embedding_dim: number): Float32Array;
   /**

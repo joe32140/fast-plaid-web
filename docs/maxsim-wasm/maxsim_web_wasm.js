@@ -135,7 +135,7 @@ export class MaxSimWasm {
         return ret;
     }
     /**
-     * Official MaxSim batch: raw sum with cosine similarity
+     * Official MaxSim batch: raw sum with dot product
      * @param {Float32Array} query_flat
      * @param {number} query_tokens
      * @param {Float32Array} doc_flat
@@ -177,7 +177,7 @@ export class MaxSimWasm {
         return v4;
     }
     /**
-     * Official MaxSim batch uniform: raw sum with cosine similarity
+     * Official MaxSim batch uniform: raw sum with dot product
      * @param {Float32Array} query_flat
      * @param {number} query_tokens
      * @param {Float32Array} doc_flat
@@ -217,7 +217,7 @@ export class MaxSimWasm {
         return v3;
     }
     /**
-     * Official MaxSim batch zero-copy: raw sum with cosine similarity
+     * Official MaxSim batch zero-copy: raw sum with dot product
      * @param {number} query_ptr
      * @param {number} query_tokens
      * @param {number} doc_ptr

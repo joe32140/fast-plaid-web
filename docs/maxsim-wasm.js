@@ -416,6 +416,7 @@ export class MaxSimWasm {
      * This is the fastest possible implementation
      */
     maxsimBatchHyperOptimized(queryEmbedding, docEmbeddings) {
+        const totalStart = performance.now();
         if (!this.isInitialized) {
             throw new Error('WASM not initialized. Call init() first.');
         }
@@ -429,6 +430,7 @@ export class MaxSimWasm {
         const docTokenCounts = docEmbeddings.map(doc => doc.length);
         const totalDocSize = docTokenCounts.reduce((sum, count) => sum + count * embeddingDim, 0);
 
+        const flattenStart = performance.now();
         // Allocate WASM linear memory directly
         const totalFloats = querySize + totalDocSize;
         const memory = new Float32Array(totalFloats);
@@ -466,19 +468,28 @@ export class MaxSimWasm {
             }
         }
 
-        // Get raw pointers to WASM linear memory
-        const queryPtr = memory.subarray(0, querySize);
-        const docPtr = memory.subarray(docStartOffset);
+        const flattenTime = performance.now() - flattenStart;
 
-        // Call hyper-optimized WASM function with direct memory access
-        const scores = this.wasmInstance.maxsim_batch_zero_copy(
-            queryPtr.byteOffset,
+        // Call the regular batch method which ALREADY does zero-copy!
+        // wasm-bindgen automatically creates slice views without copying
+        const wasmStart = performance.now();
+        const scores = this.wasmInstance.maxsim_batch(
+            memory.subarray(0, querySize),
             queryTokens,
-            docPtr.byteOffset,
-            docTokensArray.byteOffset,
-            numDocs,
+            memory.subarray(docStartOffset),
+            docTokensArray,
             embeddingDim
         );
+        const wasmTime = performance.now() - wasmStart;
+        const totalTime = performance.now() - totalStart;
+
+        if (typeof window !== 'undefined' && window.__MAXSIM_DEBUG) {
+            if (!window.__MAXSIM_CALL_COUNT) window.__MAXSIM_CALL_COUNT = 0;
+            window.__MAXSIM_CALL_COUNT++;
+            if (window.__MAXSIM_CALL_COUNT <= 5) {
+                console.log(`[NON-PRELOADED #${window.__MAXSIM_CALL_COUNT}] Total: ${totalTime.toFixed(2)}ms | Flatten: ${flattenTime.toFixed(2)}ms | WASM: ${wasmTime.toFixed(2)}ms`);
+            }
+        }
 
         return new Float32Array(scores);
     }
