@@ -250,24 +250,6 @@ export class FastPlaidQuantized {
         }
     }
     /**
-     * Set nprobe (clusters to probe per query token)
-     * PLAID default: 4 clusters per token
-     * Higher values = better recall, slower search
-     * Lower values = faster search, lower recall
-     * @param {number} nprobe
-     */
-    set_nprobe(nprobe) {
-        wasm.fastplaidquantized_set_nprobe(this.__wbg_ptr, nprobe);
-    }
-    /**
-     * Get current nprobe setting
-     * @returns {number}
-     */
-    get_nprobe() {
-        const ret = wasm.fastplaidquantized_get_nprobe(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
      * Search with quantized embeddings
      * @param {Float32Array} query_embeddings
      * @param {Uint32Array} query_shape

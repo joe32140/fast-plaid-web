@@ -29,6 +29,17 @@ export class FastPlaidQuantized {
    */
   update_index_incremental(embeddings_data: Float32Array, doc_info: BigInt64Array): void;
   /**
+   * Set nprobe (clusters to probe per query token)
+   * PLAID default: 4 clusters per token
+   * Higher values = better recall, slower search
+   * Lower values = faster search, lower recall
+   */
+  set_nprobe(nprobe: number): void;
+  /**
+   * Get current nprobe setting
+   */
+  get_nprobe(): number;
+  /**
    * Search with quantized embeddings
    */
   search(query_embeddings: Float32Array, query_shape: Uint32Array, top_k: number): string;
@@ -111,6 +122,8 @@ export interface InitOutput {
   readonly fastplaidquantized_new: () => [number, number, number];
   readonly fastplaidquantized_load_documents_quantized: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
   readonly fastplaidquantized_update_index_incremental: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+  readonly fastplaidquantized_set_nprobe: (a: number, b: number) => void;
+  readonly fastplaidquantized_get_nprobe: (a: number) => number;
   readonly fastplaidquantized_search: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
   readonly fastplaidquantized_get_index_info: (a: number) => [number, number, number, number];
   readonly fastplaidquantized_get_num_documents: (a: number) => number;
