@@ -371,6 +371,20 @@ class MxbaiEdgeColbertIntegration {
                 console.log(`🔍 Result type: ${typeof rawResult}`);
                 console.log(`🔍 Result structure:`, rawResult);
 
+                // WASM externref issue workaround: if result is a function, it might be incorrectly wrapped
+                if (typeof rawResult === 'function') {
+                    console.log('⚠️ Result is a function (WASM externref issue), trying to call it...');
+                    try {
+                        const unwrapped = rawResult();
+                        console.log('🔍 Unwrapped result:', unwrapped);
+                        // Reassign for further processing
+                        rawResult = unwrapped;
+                    } catch (e) {
+                        console.error('❌ Failed to unwrap function result:', e);
+                        throw new Error(`WASM externref issue: result is function ${rawResult}`);
+                    }
+                }
+
                 // DEBUG: Deep inspection of the result structure
                 if (rawResult && rawResult.embeddings) {
                     console.log(`🔍 DEBUG: rawResult.embeddings is Array:`, Array.isArray(rawResult.embeddings));

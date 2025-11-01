@@ -773,7 +773,7 @@
                 if (!window.MxbaiEdgeColbertIntegration) {
                     await new Promise((resolve, reject) => {
                         const script = document.createElement('script');
-                        script.src = './mxbai-integration.js?v=20251027-v2-retries';
+                        script.src = './mxbai-integration.js?v=20251027-v2-externref-fix';
                         script.onload = resolve;
                         script.onerror = reject;
                         document.head.appendChild(script);
