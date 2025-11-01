@@ -81,34 +81,53 @@ class MxbaiEdgeColbertIntegration {
     async initializeModel() {
         console.log('🚀 Loading real ColBERT model with pylate-rs...');
 
-        try {
-            // Import pylate-rs WASM module
-            console.log('📦 Importing pylate-rs WASM module...');
-            const pylateModule = await import('./pkg/pylate_rs.js');
-            console.log('🔧 Initializing WASM...');
-            await pylateModule.default(); // Initialize WASM
-            ColBERT = pylateModule.ColBERT;
+        // Retry logic for WASM loading (handles table growth issues)
+        const maxRetries = 3;
+        const retryDelay = 500; // ms
 
-            console.log('✅ pylate-rs WASM module loaded successfully');
-            console.log('🔍 Available ColBERT class:', ColBERT);
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                if (attempt > 1) {
+                    console.log(`🔄 Retry attempt ${attempt}/${maxRetries} after ${retryDelay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                }
 
-            // Load the actual model from Hugging Face
-            await this.loadModelFromHuggingFace();
+                // Import pylate-rs WASM module
+                console.log('📦 Importing pylate-rs WASM module...');
+                const pylateModule = await import('./pkg/pylate_rs.js');
+                console.log('🔧 Initializing WASM...');
+                await pylateModule.default(); // Initialize WASM
+                ColBERT = pylateModule.ColBERT;
 
-            this.modelLoaded = true;
-            this.simulationMode = false;
-            console.log(`🎉 Real ColBERT model (${this.modelRepo}) loaded successfully!`);
-            return true;
+                console.log('✅ pylate-rs WASM module loaded successfully');
+                console.log('🔍 Available ColBERT class:', ColBERT);
 
-        } catch (error) {
-            console.error('❌ Failed to initialize real ColBERT model:', error);
-            console.error('Error details:', error.stack);
+                // Load the actual model from Hugging Face
+                await this.loadModelFromHuggingFace();
 
-            // For demo purposes, let's try to continue with simulation
-            // In production, you might want to show an error to the user
-            console.log('🔄 Falling back to simulation mode for demo...');
-            await this.initializeSimulationMode();
-            return true;
+                this.modelLoaded = true;
+                this.simulationMode = false;
+                console.log(`🎉 Real ColBERT model (${this.modelRepo}) loaded successfully!`);
+                return true;
+
+            } catch (error) {
+                console.error(`❌ Attempt ${attempt}/${maxRetries} failed:`, error.message);
+
+                // If this is a table growth error and we have retries left, continue
+                if (error.message.includes('Table.grow') && attempt < maxRetries) {
+                    console.log('⏳ Table growth error detected, will retry...');
+                    continue;
+                }
+
+                // If this was the last attempt or a different error, fall back
+                if (attempt === maxRetries) {
+                    console.error('❌ All retry attempts exhausted');
+                    console.error('Error details:', error.stack);
+                    console.log('🔄 Falling back to simulation mode for demo...');
+                    await this.initializeSimulationMode();
+                    return true;
+                }
+            }
         }
     }
 

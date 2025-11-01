@@ -379,7 +379,7 @@
     </div>
 
     <script type="module">
-        import init, { FastPlaidQuantized } from './pkg/fast_plaid_rust.js?v=20251027-v2-520clusters';
+        import init, { FastPlaidQuantized } from './pkg/fast_plaid_rust.js?v=20251027-v2-retries';
         import { PrecomputedIndexLoader } from './precomputed-index-loader.js';
         import { MaxSimWasm } from './maxsim-wasm.js';
 
@@ -497,40 +497,64 @@
             loadingState.wasmMaxSim.loading = true;
             updateLoadingUI();
 
-            try {
-                console.log('🚀 Loading maxsim-web (with preloading support)...');
-                showStatus('Loading maxsim-web...', 'info');
+            const maxRetries = 3;
+            const retryDelay = 500;
 
-                // Create and initialize WASM instance with wrapper
-                wasmMaxSim = new MaxSimWasm();
-                await wasmMaxSim.init();
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    if (attempt > 1) {
+                        console.log(`🔄 Retry attempt ${attempt}/${maxRetries} for maxsim-web after ${retryDelay}ms...`);
+                        await new Promise(resolve => setTimeout(resolve, retryDelay));
+                    }
 
-                loadingState.wasmMaxSim.loaded = true;
-                loadingState.wasmMaxSim.loading = false;
-                updateLoadingUI();
+                    console.log('🚀 Loading maxsim-web (with preloading support)...');
+                    showStatus('Loading maxsim-web...', 'info');
 
-                console.log('✅ WASM MaxSim loaded with preloading support!');
-                console.log('   Info:', wasmMaxSim.getInfo());
+                    // Create and initialize WASM instance with wrapper
+                    wasmMaxSim = new MaxSimWasm();
+                    await wasmMaxSim.init();
 
-                // Check if SIMD is actually supported
-                const simdSupported = await WebAssembly.validate(new Uint8Array([
-                    0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3,
-                    2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11
-                ]));
-                console.log('   🔍 Browser SIMD support:', simdSupported ? '✅ YES' : '❌ NO');
+                    loadingState.wasmMaxSim.loaded = true;
+                    loadingState.wasmMaxSim.loading = false;
+                    updateLoadingUI();
 
-                if (!simdSupported) {
-                    console.warn('⚠️ WASM SIMD NOT SUPPORTED - WASM will be slow!');
-                    console.warn('   Use Chrome 91+, Firefox 89+, or Safari 16.4+');
+                    console.log('✅ WASM MaxSim loaded with preloading support!');
+                    console.log('   Info:', wasmMaxSim.getInfo());
+
+                    // Check if SIMD is actually supported
+                    const simdSupported = await WebAssembly.validate(new Uint8Array([
+                        0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3,
+                        2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11
+                    ]));
+                    console.log('   🔍 Browser SIMD support:', simdSupported ? '✅ YES' : '❌ NO');
+
+                    if (!simdSupported) {
+                        console.warn('⚠️ WASM SIMD NOT SUPPORTED - WASM will be slow!');
+                        console.warn('   Use Chrome 91+, Firefox 89+, or Safari 16.4+');
+                    }
+
+                    updateOverallStatus();
+                    return; // Success!
+
+                } catch (error) {
+                    console.error(`❌ Attempt ${attempt}/${maxRetries} failed for maxsim-web:`, error.message);
+
+                    // If table growth error and retries left, continue
+                    if (error.message.includes('Table.grow') && attempt < maxRetries) {
+                        console.log('⏳ Table growth error detected, will retry...');
+                        continue;
+                    }
+
+                    // Last attempt or different error
+                    if (attempt === maxRetries) {
+                        console.error('❌ All retry attempts exhausted for maxsim-web');
+                        loadingState.wasmMaxSim.error = error.message;
+                        loadingState.wasmMaxSim.loading = false;
+                        updateLoadingUI();
+                        updateOverallStatus();
+                        return;
+                    }
                 }
-
-                updateOverallStatus();
-            } catch (error) {
-                console.error('❌ Error loading WASM MaxSim:', error);
-                loadingState.wasmMaxSim.error = error.message;
-                loadingState.wasmMaxSim.loading = false;
-                updateLoadingUI();
-                updateOverallStatus();
             }
         }
 
@@ -749,7 +773,7 @@
                 if (!window.MxbaiEdgeColbertIntegration) {
                     await new Promise((resolve, reject) => {
                         const script = document.createElement('script');
-                        script.src = './mxbai-integration.js?v=20251027-v2-520clusters';
+                        script.src = './mxbai-integration.js?v=20251027-v2-retries';
                         script.onload = resolve;
                         script.onerror = reject;
                         document.head.appendChild(script);
