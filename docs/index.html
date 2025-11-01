@@ -749,7 +749,7 @@
                 if (!window.MxbaiEdgeColbertIntegration) {
                     await new Promise((resolve, reject) => {
                         const script = document.createElement('script');
-                        script.src = './mxbai-integration.js';
+                        script.src = './mxbai-integration.js?v=20251027-v2-520clusters';
                         script.onload = resolve;
                         script.onerror = reject;
                         document.head.appendChild(script);
