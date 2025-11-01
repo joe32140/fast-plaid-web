@@ -1182,12 +1182,19 @@ impl FastPlaidQuantized {
             .sum();
 
         // V2: Determine number of clusters based on TOTAL TOKENS (not documents)
-        // sqrt(N) heuristic: sqrt(270k) ≈ 520 clusters for proper token-level selectivity
-        self.num_clusters = (total_tokens as f32).sqrt().ceil() as usize;
-        self.num_clusters = self.num_clusters.max(100).min(1000); // Reasonable bounds: 100-1000 clusters
+        // Target ~100-150 tokens per cluster for good selectivity (PLAID-inspired)
+        // For 270k tokens: 270k/150 = 1800, round to power of 2 = 2048
+        let tokens_per_cluster_target = 150;
+        self.num_clusters = (total_tokens / tokens_per_cluster_target).max(1);
 
-        console_log!("   V2: Creating {} IVF clusters for {} tokens from {} documents...",
-                     self.num_clusters, total_tokens, num_docs);
+        // Round up to next power of 2 for efficiency (better memory alignment)
+        self.num_clusters = self.num_clusters.next_power_of_two();
+
+        // Reasonable bounds: at least 256, at most 4096
+        self.num_clusters = self.num_clusters.max(256).min(4096);
+
+        console_log!("   V2: Creating {} IVF clusters for {} tokens from {} documents (~{} tokens/cluster target)...",
+                     self.num_clusters, total_tokens, num_docs, total_tokens / self.num_clusters);
 
         let mut all_tokens = Vec::with_capacity(total_tokens);
         let mut token_to_doc: Vec<usize> = Vec::with_capacity(total_tokens);
@@ -1212,17 +1219,31 @@ impl FastPlaidQuantized {
         self.ivf_centroids = vec![0.0; self.num_clusters * self.embedding_dim];
         self.ivf_clusters = vec![Vec::new(); self.num_clusters];
 
-        // Initialize centroids: pick evenly spaced tokens
+        // Initialize centroids: pick RANDOM tokens (better than evenly-spaced for normalized embeddings)
+        // Use a simple LCG (Linear Congruential Generator) for deterministic randomness
+        let mut rng_state = 123456789u64; // Seed
+        let mut used_indices = std::collections::HashSet::new();
+
         for c in 0..self.num_clusters {
-            let token_idx = (c * total_tokens) / self.num_clusters;
+            // Generate random index using LCG
+            let mut token_idx;
+            loop {
+                rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
+                token_idx = (rng_state % (total_tokens as u64)) as usize;
+                if !used_indices.contains(&token_idx) {
+                    used_indices.insert(token_idx);
+                    break;
+                }
+            }
+
             let token_start = token_idx * self.embedding_dim;
             let centroid_start = c * self.embedding_dim;
             self.ivf_centroids[centroid_start..centroid_start + self.embedding_dim]
                 .copy_from_slice(&all_tokens[token_start..token_start + self.embedding_dim]);
         }
 
-        // Run k-means iterations on ALL tokens
-        for _iteration in 0..10 {
+        // Run k-means iterations on ALL tokens (increased from 10 to 20 for better convergence)
+        for _iteration in 0..20 {
             // Clear clusters
             for cluster in &mut self.ivf_clusters {
                 cluster.clear();
@@ -1264,7 +1285,8 @@ impl FastPlaidQuantized {
                 centroid_counts[nearest_cluster] += 1;
             }
 
-            // Average
+            // Average and handle empty clusters
+            let mut empty_clusters = Vec::new();
             for c in 0..self.num_clusters {
                 if centroid_counts[c] > 0 {
                     let centroid_start = c * self.embedding_dim;
@@ -1272,6 +1294,22 @@ impl FastPlaidQuantized {
                     for d in 0..self.embedding_dim {
                         new_centroids[centroid_start + d] /= count;
                     }
+                } else {
+                    // Track empty clusters for reinitialization
+                    empty_clusters.push(c);
+                }
+            }
+
+            // Reinitialize empty clusters with random tokens (prevents wasted clusters)
+            if !empty_clusters.is_empty() {
+                for &empty_c in &empty_clusters {
+                    // Pick a random token to reinitialize this centroid
+                    rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let token_idx = (rng_state % (total_tokens as u64)) as usize;
+                    let token_start = token_idx * self.embedding_dim;
+                    let centroid_start = empty_c * self.embedding_dim;
+                    new_centroids[centroid_start..centroid_start + self.embedding_dim]
+                        .copy_from_slice(&all_tokens[token_start..token_start + self.embedding_dim]);
                 }
             }
 
