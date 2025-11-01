@@ -1141,67 +1141,97 @@ impl FastPlaidQuantized {
 
         console_log!("   Creating {} IVF clusters...", self.num_clusters);
 
-        // Extract document representatives using FIRST TOKEN (not average)
-        // For ColBERT, first token is often the [CLS] token or title, which is more
-        // discriminative than averaging all tokens (which washes out the signal)
-        let mut doc_reps = Vec::with_capacity(num_docs);
+        // V1: Extract ALL TOKENS (not just first token) for better clustering
+        // This is the first step towards token-level IVF
+        let total_tokens: usize = (0..num_docs)
+            .map(|i| doc_info[i * 2 + 1] as usize)
+            .sum();
+
+        console_log!("   V1: Collecting ALL {} tokens from {} documents...", total_tokens, num_docs);
+
+        let mut all_tokens = Vec::with_capacity(total_tokens);
+        let mut token_to_doc: Vec<usize> = Vec::with_capacity(total_tokens);
         let mut offset = 0;
 
-        for i in 0..num_docs {
-            let num_tokens = doc_info[i * 2 + 1] as usize;
+        for doc_idx in 0..num_docs {
+            let num_tokens = doc_info[doc_idx * 2 + 1] as usize;
             let doc_emb = &embeddings_data[offset..offset + num_tokens * self.embedding_dim];
 
-            // Use FIRST token as representative (most discriminative for ColBERT)
-            let first_token = doc_emb[0..self.embedding_dim].to_vec();
-            doc_reps.push(first_token);
+            // Collect ALL tokens from this document
+            for token_idx in 0..num_tokens {
+                let token_start = token_idx * self.embedding_dim;
+                let token = &doc_emb[token_start..token_start + self.embedding_dim];
+                all_tokens.extend_from_slice(token);
+                token_to_doc.push(doc_idx);
+            }
 
             offset += num_tokens * self.embedding_dim;
         }
 
-        // K-means clustering
+        // K-means clustering on ALL tokens (but same number of clusters as before)
         self.ivf_centroids = vec![0.0; self.num_clusters * self.embedding_dim];
         self.ivf_clusters = vec![Vec::new(); self.num_clusters];
 
-        // Initialize centroids: pick evenly spaced documents
+        // Initialize centroids: pick evenly spaced tokens
         for c in 0..self.num_clusters {
-            let doc_idx = (c * num_docs) / self.num_clusters;
-            let src_start = c * self.embedding_dim;
-            self.ivf_centroids[src_start..src_start + self.embedding_dim]
-                .copy_from_slice(&doc_reps[doc_idx]);
+            let token_idx = (c * total_tokens) / self.num_clusters;
+            let token_start = token_idx * self.embedding_dim;
+            let centroid_start = c * self.embedding_dim;
+            self.ivf_centroids[centroid_start..centroid_start + self.embedding_dim]
+                .copy_from_slice(&all_tokens[token_start..token_start + self.embedding_dim]);
         }
 
-        // Run k-means iterations
+        // Run k-means iterations on ALL tokens
         for _iteration in 0..10 {
             // Clear clusters
             for cluster in &mut self.ivf_clusters {
                 cluster.clear();
             }
 
-            // Assign documents to nearest cluster
-            for doc_idx in 0..num_docs {
-                let doc_rep = &doc_reps[doc_idx];
-                let nearest_cluster = self.find_nearest_ivf_cluster(doc_rep);
-                self.ivf_clusters[nearest_cluster].push(doc_idx);
+            // Assign each TOKEN to nearest cluster
+            // Then map token → doc and add doc to cluster
+            let mut cluster_doc_sets: Vec<std::collections::HashSet<usize>> =
+                vec![std::collections::HashSet::new(); self.num_clusters];
+
+            for token_idx in 0..total_tokens {
+                let token_start = token_idx * self.embedding_dim;
+                let token = &all_tokens[token_start..token_start + self.embedding_dim];
+                let nearest_cluster = self.find_nearest_ivf_cluster(token);
+                let doc_idx = token_to_doc[token_idx];
+
+                // Add document to this cluster (HashSet ensures no duplicates)
+                cluster_doc_sets[nearest_cluster].insert(doc_idx);
             }
 
-            // Update centroids
+            // Convert HashSets to Vecs
+            for (cluster_id, doc_set) in cluster_doc_sets.iter().enumerate() {
+                self.ivf_clusters[cluster_id] = doc_set.iter().copied().collect();
+            }
+
+            // Update centroids by averaging assigned TOKENS
             let mut new_centroids = vec![0.0; self.num_clusters * self.embedding_dim];
-            for (cluster_id, doc_indices) in self.ivf_clusters.iter().enumerate() {
-                if doc_indices.is_empty() {
-                    continue;
-                }
+            let mut centroid_counts = vec![0usize; self.num_clusters];
 
-                let centroid_start = cluster_id * self.embedding_dim;
-                for &doc_idx in doc_indices {
-                    for d in 0..self.embedding_dim {
-                        new_centroids[centroid_start + d] += doc_reps[doc_idx][d];
-                    }
-                }
+            for token_idx in 0..total_tokens {
+                let token_start = token_idx * self.embedding_dim;
+                let token = &all_tokens[token_start..token_start + self.embedding_dim];
+                let nearest_cluster = self.find_nearest_ivf_cluster(token);
 
-                // Average
-                let count = doc_indices.len() as f32;
+                let centroid_start = nearest_cluster * self.embedding_dim;
                 for d in 0..self.embedding_dim {
-                    new_centroids[centroid_start + d] /= count;
+                    new_centroids[centroid_start + d] += token[d];
+                }
+                centroid_counts[nearest_cluster] += 1;
+            }
+
+            // Average
+            for c in 0..self.num_clusters {
+                if centroid_counts[c] > 0 {
+                    let centroid_start = c * self.embedding_dim;
+                    let count = centroid_counts[c] as f32;
+                    for d in 0..self.embedding_dim {
+                        new_centroids[centroid_start + d] /= count;
+                    }
                 }
             }
 
