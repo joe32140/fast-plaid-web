@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test ColBERT Encoding - Isolated</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: blue; }
+        #output {
+            background: #f5f5f5;
+            padding: 10px;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 ColBERT Encoding Test (Isolated)</h1>
+
+    <div class="test-section">
+        <h2>Test Configuration</h2>
+        <p>This page loads ONLY pylate_rs (no other WASM modules) to test encoding in isolation.</p>
+        <button onclick="loadModel()">1. Load Model</button>
+        <button onclick="testEncoding()" id="encodeBtn" disabled>2. Test Encoding</button>
+        <button onclick="clearOutput()">Clear Output</button>
+    </div>
+
+    <div class="test-section">
+        <h2>Output</h2>
+        <div id="output"></div>
+    </div>
+
+    <script type="module">
+        let ColBERT = null;
+        let model = null;
+
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const prefix = type === 'error' ? '❌ ' : type === 'success' ? '✅ ' : '🔍 ';
+            const className = type;
+            output.innerHTML += `<span class="${className}">${prefix}${message}</span>\n`;
+            console.log(message);
+        }
+
+        window.clearOutput = function() {
+            document.getElementById('output').innerHTML = '';
+        };
+
+        window.loadModel = async function() {
+            log('Starting model load...');
+
+            try {
+                // Import pylate-rs WASM module
+                log('📦 Importing pylate-rs WASM module...');
+                const pylateModule = await import('./pkg/pylate_rs.js');
+
+                log('🔧 Initializing WASM...');
+                await pylateModule.default(); // Initialize WASM
+
+                ColBERT = pylateModule.ColBERT;
+                log('✅ pylate-rs WASM module loaded successfully', 'success');
+
+                // Load model files
+                log('📥 Fetching model files from HuggingFace...');
+                const modelRepo = 'mixedbread-ai/mxbai-edge-colbert-v0-17m';
+                const baseUrl = `https://huggingface.co/${modelRepo}/resolve/main`;
+
+                const files = {
+                    model: await fetch(`${baseUrl}/model.safetensors`).then(r => r.arrayBuffer()),
+                    dense: await fetch(`${baseUrl}/1_Dense/model.safetensors`).then(r => r.arrayBuffer()),
+                    dense2: await fetch(`${baseUrl}/2_Dense/model.safetensors`).then(r => r.arrayBuffer()),
+                    tokenizer: await fetch(`${baseUrl}/tokenizer.json`).then(r => r.arrayBuffer()),
+                    config: await fetch(`${baseUrl}/config.json`).then(r => r.arrayBuffer()),
+                    stConfig: await fetch(`${baseUrl}/config_sentence_transformers.json`).then(r => r.arrayBuffer()),
+                    denseConfig: await fetch(`${baseUrl}/1_Dense/config.json`).then(r => r.arrayBuffer()),
+                    dense2Config: await fetch(`${baseUrl}/2_Dense/config.json`).then(r => r.arrayBuffer()),
+                    tokensConfig: await fetch(`${baseUrl}/special_tokens_map.json`).then(r => r.arrayBuffer())
+                };
+
+                log('✅ All model files fetched', 'success');
+                log(`📊 Sizes: model=${(files.model.byteLength/1e6).toFixed(1)}MB, dense=${(files.dense.byteLength/1e3).toFixed(1)}KB, dense2=${(files.dense2.byteLength/1e3).toFixed(1)}KB`);
+
+                // Initialize ColBERT model with NEW signature (2_Dense support)
+                log('🔧 Initializing ColBERT model...');
+                model = new ColBERT(
+                    new Uint8Array(files.model),
+                    new Uint8Array(files.dense),
+                    new Uint8Array(files.dense2),
+                    new Uint8Array(files.tokenizer),
+                    new Uint8Array(files.config),
+                    new Uint8Array(files.stConfig),
+                    new Uint8Array(files.denseConfig),
+                    new Uint8Array(files.dense2Config),
+                    new Uint8Array(files.tokensConfig)
+                );
+
+                log('✅ ColBERT model initialized successfully!', 'success');
+                log('Expected output dimension: 48 (with 2_Dense: 256→512→48)');
+
+                document.getElementById('encodeBtn').disabled = false;
+
+            } catch (error) {
+                log(`Error loading model: ${error.message}`, 'error');
+                log(`Stack: ${error.stack}`, 'error');
+            }
+        };
+
+        window.testEncoding = async function() {
+            if (!model) {
+                log('Model not loaded yet!', 'error');
+                return;
+            }
+
+            log('--- Testing Encoding ---');
+            const testQuery = "Simple Projection Variants Improve ColBERT Performance";
+            log(`Query: "${testQuery}"`);
+
+            try {
+                log('Calling model.encode()...');
+                const result = await model.encode({
+                    sentences: [testQuery],
+                    is_query: true
+                });
+
+                log('✅ Encode returned successfully', 'success');
+                log(`Result type: ${typeof result}`);
+                log(`Result constructor: ${result?.constructor?.name || 'unknown'}`);
+
+                // Try to inspect the result
+                if (typeof result === 'function') {
+                    log('⚠️ WARNING: Result is a FUNCTION!', 'error');
+                    log(`Function: ${result}`);
+                    log('This indicates WASM externref corruption');
+
+                    // Try calling it
+                    try {
+                        log('Attempting to call the function...');
+                        const unwrapped = result();
+                        log(`Unwrapped type: ${typeof unwrapped}`);
+                        log(`Unwrapped value: ${JSON.stringify(unwrapped)}`);
+                    } catch (e) {
+                        log(`Failed to call function: ${e.message}`, 'error');
+                    }
+
+                } else if (result && result.embeddings) {
+                    log('✅ Result has embeddings property', 'success');
+                    log(`Embeddings is Array: ${Array.isArray(result.embeddings)}`);
+                    log(`Embeddings length: ${result.embeddings?.length}`);
+
+                    if (result.embeddings[0]) {
+                        log(`First sentence is Array: ${Array.isArray(result.embeddings[0])}`);
+                        log(`First sentence length (num tokens): ${result.embeddings[0]?.length}`);
+
+                        if (result.embeddings[0][0]) {
+                            log(`First token is Array: ${Array.isArray(result.embeddings[0][0])}`);
+                            log(`First token length (dim): ${result.embeddings[0][0]?.length}`);
+                            log(`First token values (first 5): ${result.embeddings[0][0]?.slice(0, 5)}`);
+                        }
+                    }
+                } else {
+                    log(`Unknown result format: ${JSON.stringify(result)}`, 'error');
+                }
+
+            } catch (error) {
+                log(`Encoding failed: ${error.message}`, 'error');
+                log(`Stack: ${error.stack}`, 'error');
+            }
+        };
+    </script>
+</body>
+</html>
