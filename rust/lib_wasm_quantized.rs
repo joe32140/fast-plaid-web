@@ -398,6 +398,7 @@ pub struct FastPlaidQuantized {
     ivf_clusters: Vec<Vec<usize>>,  // cluster_id -> [doc_indices] (base index)
     ivf_centroids: Vec<f32>,         // [num_clusters, embedding_dim]
     num_clusters: usize,
+    nprobe: usize,                   // Number of clusters to probe PER QUERY TOKEN (PLAID-style)
     // Delta-encoded IVF for incremental updates
     ivf_deltas: Vec<IVFDelta>,       // Pending additions to IVF
     delta_threshold: usize,          // Compact when deltas exceed this percentage
@@ -423,6 +424,7 @@ impl FastPlaidQuantized {
             ivf_clusters: Vec::new(),
             ivf_centroids: Vec::new(),
             num_clusters: 0,
+            nprobe: 4, // PLAID default: 4 clusters per query token
             ivf_deltas: Vec::new(),
             delta_threshold: 10, // Compact when deltas exceed 10% of base
             base_doc_count: 0,
@@ -612,6 +614,22 @@ impl FastPlaidQuantized {
         Ok(())
     }
 
+    /// Set nprobe (clusters to probe per query token)
+    /// PLAID default: 4 clusters per token
+    /// Higher values = better recall, slower search
+    /// Lower values = faster search, lower recall
+    #[wasm_bindgen]
+    pub fn set_nprobe(&mut self, nprobe: usize) {
+        self.nprobe = nprobe.max(1).min(self.num_clusters);
+        console_log!("🔧 Set nprobe = {} clusters per query token", self.nprobe);
+    }
+
+    /// Get current nprobe setting
+    #[wasm_bindgen]
+    pub fn get_nprobe(&self) -> usize {
+        self.nprobe
+    }
+
     /// Search with quantized embeddings
     #[wasm_bindgen]
     pub fn search(
@@ -644,24 +662,24 @@ impl FastPlaidQuantized {
 
         let query_emb = &query_embeddings[0..query_num_tokens * query_dim];
 
-        // V2: Token-level IVF Search
-        // With ~520 clusters for 270k tokens, we need to probe more clusters for good recall
-        // Heuristic: probe ~30 clusters to get 20-30% recall (vs 100% with old 6-cluster probing)
-        let num_probe_clusters = if self.num_clusters > 100 {
-            // Token-level IVF: probe fixed 30 clusters for reasonable recall
-            30_usize.min(self.num_clusters)
+        // V2: Token-level IVF Search (PLAID-style)
+        // PLAID paper: nprobe specifies clusters to probe PER QUERY TOKEN, not total
+        // Default: nprobe=4 means each query token probes its top-4 nearest clusters
+        // For 8 query tokens × 4 clusters/token = ~30 unique clusters after HashSet dedup
+        let nprobe_per_token = if self.num_clusters > 100 {
+            // Token-level IVF: use configured nprobe per token
+            self.nprobe.min(self.num_clusters)
         } else {
             // Document-level IVF: probe sqrt(num_clusters) for backward compatibility
             (self.num_clusters as f32).sqrt().ceil() as usize
         };
-        let num_probe_clusters = num_probe_clusters.max(3).min(self.num_clusters); // At least 3, at most all
+
+        console_log!("🔍 IVF Config: {} clusters, nprobe={} per token ({} query tokens)",
+                     self.num_clusters, nprobe_per_token, query_num_tokens);
 
         // V2: Token-level IVF requires finding clusters for ALL query tokens, not just first
-        // For each query token, find its nearest cluster. Then probe the union of all these clusters.
+        // For each query token, find its nearest clusters. Then probe the union of all these clusters.
         let mut cluster_set = std::collections::HashSet::new();
-
-        // For each query token, find its top clusters
-        let probes_per_token = (num_probe_clusters / query_num_tokens).max(3); // At least 3 per token
 
         for token_idx in 0..query_num_tokens {
             let token_start = token_idx * self.embedding_dim;
@@ -684,18 +702,18 @@ impl FastPlaidQuantized {
 
             cluster_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-            // Add top clusters for this query token
-            for (cluster_id, _score) in cluster_scores.iter().take(probes_per_token) {
+            // Add top nprobe_per_token clusters for this query token (PLAID-style)
+            for (cluster_id, _score) in cluster_scores.iter().take(nprobe_per_token) {
                 cluster_set.insert(*cluster_id);
             }
         }
 
         // Convert to sorted vec for deterministic behavior
-        let mut top_clusters: Vec<usize> = cluster_set.into_iter().collect();
-        top_clusters.sort();
-
-        // Limit to num_probe_clusters total
-        top_clusters.truncate(num_probe_clusters);
+        let top_clusters: Vec<usize> = {
+            let mut clusters: Vec<usize> = cluster_set.into_iter().collect();
+            clusters.sort();
+            clusters
+        };
 
         // Collect candidate documents from top clusters (BASE + DELTAS)
         let mut candidate_docs: Vec<usize> = Vec::new();
@@ -728,8 +746,11 @@ impl FastPlaidQuantized {
             console_log!("⚠️  Warning: {} duplicate candidates found!", original_count - unique_count);
         }
 
-        console_log!("🔍 IVF Search: Probing {} clusters (sizes: {:?}), {} unique candidates out of {} total docs ({} in deltas)",
-            num_probe_clusters, cluster_sizes, unique_count, self.documents.len(), self.ivf_deltas.len());
+        console_log!("🔍 IVF Search: {} query tokens × {} nprobe/token → {} unique clusters probed",
+            query_num_tokens, nprobe_per_token, top_clusters.len());
+        console_log!("   Cluster sizes: {:?}", cluster_sizes.iter().take(10).collect::<Vec<_>>());
+        console_log!("   Result: {} unique candidates out of {} total docs ({:.1}% recall)",
+            unique_count, self.documents.len(), (unique_count as f32 / self.documents.len() as f32) * 100.0);
 
         // Use unique candidates only to avoid redundant work
         let candidate_docs = sorted_candidates;
@@ -772,7 +793,7 @@ impl FastPlaidQuantized {
             passage_ids,
             scores: score_values,
             candidates_searched: candidate_docs.len(),
-            num_clusters_probed: num_probe_clusters,
+            num_clusters_probed: top_clusters.len(),
         }];
 
         serde_json::to_string(&results)
