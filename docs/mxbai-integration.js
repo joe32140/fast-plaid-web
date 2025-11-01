@@ -471,6 +471,7 @@ class MxbaiEdgeColbertIntegration {
             embeddings: embeddings,
             shape: [1, numTokens, this.embeddingDim],
             numTokens: numTokens,
+            tokenDim: this.embeddingDim,
             isReal: false,
             encodingTime: encodingTime
         };

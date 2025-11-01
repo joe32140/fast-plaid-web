@@ -644,11 +644,16 @@ impl FastPlaidQuantized {
 
         let query_emb = &query_embeddings[0..query_num_tokens * query_dim];
 
-        // IVF Search: Find candidate documents from top clusters
-        // NOTE: Native FastPlaid uses token-level IVF (more accurate but complex)
-        // WASM uses document-level IVF which is simpler but less accurate
-        // Probe a subset of clusters for speedup (√num_clusters is a good heuristic)
-        let num_probe_clusters = (self.num_clusters as f32).sqrt().ceil() as usize;
+        // V2: Token-level IVF Search
+        // With ~520 clusters for 270k tokens, we need to probe more clusters for good recall
+        // Heuristic: probe ~30 clusters to get 20-30% recall (vs 100% with old 6-cluster probing)
+        let num_probe_clusters = if self.num_clusters > 100 {
+            // Token-level IVF: probe fixed 30 clusters for reasonable recall
+            30_usize.min(self.num_clusters)
+        } else {
+            // Document-level IVF: probe sqrt(num_clusters) for backward compatibility
+            (self.num_clusters as f32).sqrt().ceil() as usize
+        };
         let num_probe_clusters = num_probe_clusters.max(3).min(self.num_clusters); // At least 3, at most all
 
         // Compute query representative using FIRST TOKEN (matches how we build IVF)
@@ -1135,19 +1140,18 @@ impl FastPlaidQuantized {
         doc_info: &[i64],
         num_docs: usize,
     ) -> Result<(), JsValue> {
-        // Determine number of clusters (sqrt(N) is a common heuristic)
-        self.num_clusters = (num_docs as f32).sqrt().ceil() as usize;
-        self.num_clusters = self.num_clusters.max(10).min(100); // Between 10-100 clusters
-
-        console_log!("   Creating {} IVF clusters...", self.num_clusters);
-
-        // V1: Extract ALL TOKENS (not just first token) for better clustering
-        // This is the first step towards token-level IVF
+        // V2: Extract ALL TOKENS first to calculate cluster count
         let total_tokens: usize = (0..num_docs)
             .map(|i| doc_info[i * 2 + 1] as usize)
             .sum();
 
-        console_log!("   V1: Collecting ALL {} tokens from {} documents...", total_tokens, num_docs);
+        // V2: Determine number of clusters based on TOTAL TOKENS (not documents)
+        // sqrt(N) heuristic: sqrt(270k) ≈ 520 clusters for proper token-level selectivity
+        self.num_clusters = (total_tokens as f32).sqrt().ceil() as usize;
+        self.num_clusters = self.num_clusters.max(100).min(1000); // Reasonable bounds: 100-1000 clusters
+
+        console_log!("   V2: Creating {} IVF clusters for {} tokens from {} documents...",
+                     self.num_clusters, total_tokens, num_docs);
 
         let mut all_tokens = Vec::with_capacity(total_tokens);
         let mut token_to_doc: Vec<usize> = Vec::with_capacity(total_tokens);
