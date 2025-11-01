@@ -656,31 +656,46 @@ impl FastPlaidQuantized {
         };
         let num_probe_clusters = num_probe_clusters.max(3).min(self.num_clusters); // At least 3, at most all
 
-        // Compute query representative using FIRST TOKEN (matches how we build IVF)
-        // Using first token is more discriminative than averaging for ColBERT
-        let query_rep = query_emb[0..self.embedding_dim].to_vec();
+        // V2: Token-level IVF requires finding clusters for ALL query tokens, not just first
+        // For each query token, find its nearest cluster. Then probe the union of all these clusters.
+        let mut cluster_set = std::collections::HashSet::new();
 
-        // Score each cluster by similarity to query representative
-        let mut cluster_scores: Vec<(usize, f32)> = (0..self.num_clusters)
-            .map(|c| {
-                let centroid_start = c * self.embedding_dim;
-                let centroid = &self.ivf_centroids[centroid_start..centroid_start + self.embedding_dim];
+        // For each query token, find its top clusters
+        let probes_per_token = (num_probe_clusters / query_num_tokens).max(3); // At least 3 per token
 
-                let mut score = 0.0;
-                for d in 0..self.embedding_dim {
-                    score += query_rep[d] * centroid[d];
-                }
+        for token_idx in 0..query_num_tokens {
+            let token_start = token_idx * self.embedding_dim;
+            let query_token = &query_emb[token_start..token_start + self.embedding_dim];
 
-                (c, score)
-            })
-            .collect();
+            // Score each cluster by similarity to this query token
+            let mut cluster_scores: Vec<(usize, f32)> = (0..self.num_clusters)
+                .map(|c| {
+                    let centroid_start = c * self.embedding_dim;
+                    let centroid = &self.ivf_centroids[centroid_start..centroid_start + self.embedding_dim];
 
-        cluster_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let top_clusters: Vec<usize> = cluster_scores
-            .iter()
-            .take(num_probe_clusters)
-            .map(|(c, _)| *c)
-            .collect();
+                    let mut score = 0.0;
+                    for d in 0..self.embedding_dim {
+                        score += query_token[d] * centroid[d];
+                    }
+
+                    (c, score)
+                })
+                .collect();
+
+            cluster_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            // Add top clusters for this query token
+            for (cluster_id, _score) in cluster_scores.iter().take(probes_per_token) {
+                cluster_set.insert(*cluster_id);
+            }
+        }
+
+        // Convert to sorted vec for deterministic behavior
+        let mut top_clusters: Vec<usize> = cluster_set.into_iter().collect();
+        top_clusters.sort();
+
+        // Limit to num_probe_clusters total
+        top_clusters.truncate(num_probe_clusters);
 
         // Collect candidate documents from top clusters (BASE + DELTAS)
         let mut candidate_docs: Vec<usize> = Vec::new();
