@@ -1219,31 +1219,33 @@ impl FastPlaidQuantized {
         self.ivf_centroids = vec![0.0; self.num_clusters * self.embedding_dim];
         self.ivf_clusters = vec![Vec::new(); self.num_clusters];
 
-        // Initialize centroids: pick RANDOM tokens (better than evenly-spaced for normalized embeddings)
-        // Use a simple LCG (Linear Congruential Generator) for deterministic randomness
-        let mut rng_state = 123456789u64; // Seed
-        let mut used_indices = std::collections::HashSet::new();
+        // Initialize centroids: pick RANDOM tokens using Fisher-Yates shuffle (O(n) instead of O(n²))
+        console_log!("   Initializing {} centroids with Fisher-Yates shuffle...", self.num_clusters);
+        let mut rng_state = 123456789u64; // Seed for LCG
 
+        // Create index array and shuffle first num_clusters positions
+        let mut indices: Vec<usize> = (0..total_tokens).collect();
+        for i in 0..self.num_clusters {
+            // Fisher-Yates: swap position i with random position j >= i
+            rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
+            let j = i + ((rng_state % ((total_tokens - i) as u64)) as usize);
+            indices.swap(i, j);
+        }
+
+        // Copy first num_clusters shuffled tokens as initial centroids
         for c in 0..self.num_clusters {
-            // Generate random index using LCG
-            let mut token_idx;
-            loop {
-                rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
-                token_idx = (rng_state % (total_tokens as u64)) as usize;
-                if !used_indices.contains(&token_idx) {
-                    used_indices.insert(token_idx);
-                    break;
-                }
-            }
-
+            let token_idx = indices[c];
             let token_start = token_idx * self.embedding_dim;
             let centroid_start = c * self.embedding_dim;
             self.ivf_centroids[centroid_start..centroid_start + self.embedding_dim]
                 .copy_from_slice(&all_tokens[token_start..token_start + self.embedding_dim]);
         }
+        console_log!("   ✅ Initialized {} centroids", self.num_clusters);
 
         // Run k-means iterations on ALL tokens (increased from 10 to 20 for better convergence)
-        for _iteration in 0..20 {
+        for iteration in 0..20 {
+            console_log!("   K-means iteration {}/20...", iteration + 1);
+
             // Clear clusters
             for cluster in &mut self.ivf_clusters {
                 cluster.clear();
