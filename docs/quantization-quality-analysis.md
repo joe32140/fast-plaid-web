@@ -409,5 +409,55 @@ let num_centroids = 512.min(max_centroids_for_quality);
 ```
 
 **Current Status:**
-- ✅ 256 centroids: 0.04% error (excellent)
-- ✅ 512 centroids: 0.85% error (good, recommended for IVF balance)
+- ✅ 256 centroids + global quantization: 0.04% error (excellent) **← FINAL CHOICE**
+- ✅ 512 centroids + global quantization: 0.85% error (acceptable)
+
+---
+
+## Appendix: Per-Dimension Quantization Experiment
+
+### Hypothesis
+We hypothesized that per-dimension quantization (each of 48 dimensions gets its own 16 buckets) would improve quality by handling heterogeneous residual distributions better than global quantization (same 16 buckets for all dimensions).
+
+### Implementation
+Changed from:
+```rust
+bucket_weights: Vec<f32>  // [16 * 48] - global
+```
+
+To:
+```rust
+bucket_weights: Vec<Vec<f32>>  // [48][16] - per-dimension
+```
+
+Each dimension independently learns its 16 bucket values from its residual distribution.
+
+### Results
+
+| Centroids | Samples/Centroid | Quantization | Score | Error | Result |
+|-----------|------------------|--------------|--------|-------|--------|
+| 256 | 1,056 | Global | 12.8949 | 0.04% | ✅✅✅ Best |
+| 512 | 528 | Global | 12.7908 | 0.85% | ✅ Baseline |
+| 512 | 528 | **Per-dim** | 12.7881 | 0.87% | ❌ **0.02% WORSE** |
+| 2048 | 132 | Global | ~12.56 | ~2.6% | ❌ Poor |
+| 2048 | 132 | **Per-dim** | 12.4701 | 3.3% | ❌❌ **0.7% WORSE** |
+
+### Conclusion
+
+**Per-dimension quantization DOES NOT help. In fact, it makes quality slightly worse.**
+
+**Why it failed:**
+
+1. **Residuals are already homogeneous after centering**: After k-means assigns tokens to centroids and removes the average residual, the remaining residuals across dimensions are similar enough that global 16-bucket quantization handles them well.
+
+2. **Per-dimension adds noise**: With only 270k samples, learning 48 separate sets of 16 buckets (768 parameters) instead of 1 set of 16 buckets (16 parameters) means each dimension gets less data to learn from, adding statistical noise.
+
+3. **The real bottleneck is k-means**: Quality degradation comes from poor centroid positioning (when samples/centroid < 500), not from quantization bucket design.
+
+**Trade-offs of per-dimension approach:**
+- ❌ More complex code (2D arrays)
+- ❌ More memory (6.3 KB vs 3.1 KB)
+- ❌ No quality improvement
+- ❌ Slight quality degradation
+
+**Recommendation:** Stick with global quantization. The simplicity, lower memory, and equal-or-better quality make it the clear winner.
