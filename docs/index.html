@@ -371,7 +371,11 @@
                 </div>
                 <div class="method-description">
                     <strong>4-bit Quantization + IVF Indexing</strong> (<a href="https://github.com/joe32140/fast-plaid" target="_blank" style="color: #667eea; text-decoration: underline;">FastPlaid-Web</a>)<br>
-                    8x smaller, <span id="clustersProbed">~6</span> clusters → <span id="candidatesCount">~300</span> candidates (speed + memory trade-off)
+                    8x smaller, <span id="clustersProbed">~6</span> clusters → <span id="candidatesCount">~300</span> candidates (speed + memory trade-off)<br>
+                    <span style="font-size: 12px; color: #666; margin-top: 5px; display: block;">
+                        <strong>Quantization:</strong> 512 centroids (99.15% quality, 0.85% error) + nprobe=1 for max speed.
+                        See <a href="quantization-quality-analysis.md" target="_blank" style="color: #667eea;">analysis</a> for our empirical findings on centroid count vs quality trade-offs.
+                    </span>
                 </div>
                 <div id="fastplaidResults"></div>
             </div>
@@ -379,7 +383,7 @@
     </div>
 
     <script type="module">
-        import init, { FastPlaidQuantized } from './pkg/fast_plaid_rust.js?v=20251101-final-256';
+        import init, { FastPlaidQuantized } from './pkg/fast_plaid_rust.js?v=20251101-demo-512-np1';
         import { PrecomputedIndexLoader } from './precomputed-index-loader.js';
         import { MaxSimWasm } from './maxsim-wasm.js';
 

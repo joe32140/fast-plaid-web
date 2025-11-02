@@ -461,7 +461,7 @@ impl FastPlaidQuantized {
             ivf_clusters: Vec::new(),
             ivf_centroids: Vec::new(),
             num_clusters: 0,
-            nprobe: 2, // Number of clusters to probe per query token (2 for speed, 8 for recall)
+            nprobe: 1, // Number of clusters to probe per query token (1 for max speed, 2-4 for better recall)
             ivf_deltas: Vec::new(),
             delta_threshold: 10, // Compact when deltas exceed 10% of base
             base_doc_count: 0,
@@ -503,8 +503,8 @@ impl FastPlaidQuantized {
         }
 
         // Initialize and train codec
-        // Use 256 centroids for optimal quality (99.96% accuracy, 1056 tokens/centroid)
-        let num_centroids = num_centroids.unwrap_or(256.min(total_tokens / 10));
+        // Use 512 centroids for balanced quality + IVF filtering (99.15% accuracy, 528 tokens/centroid)
+        let num_centroids = num_centroids.unwrap_or(512.min(total_tokens / 10));
         let mut codec = ResidualCodec4bit::new(self.embedding_dim, num_centroids);
         codec.train(embeddings_data, total_tokens, 5);
 
