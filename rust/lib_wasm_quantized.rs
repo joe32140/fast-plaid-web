@@ -60,25 +60,62 @@ impl ResidualCodec4bit {
             return;
         }
 
-        // Simple k-means initialization: pick random samples as initial centroids
-        let step = num_tokens.max(self.num_centroids) / self.num_centroids;
+        // Fast-Plaid: Subsample training data if too many points (max_points_per_centroid=256)
+        let max_points_per_centroid = 256;
+        let max_training_points = self.num_centroids * max_points_per_centroid;
+
+        let (training_embeddings, training_count): (Vec<f32>, usize) = if num_tokens > max_training_points {
+            console_log!("   📊 Subsampling for k-means: {} → {} tokens ({:.1}%)",
+                         num_tokens, max_training_points,
+                         100.0 * max_training_points as f32 / num_tokens as f32);
+
+            // Random subsample using Fisher-Yates shuffle
+            let mut rng_state = 123456789u64; // LCG seed
+            let mut indices: Vec<usize> = (0..num_tokens).collect();
+
+            // Shuffle first max_training_points positions
+            for i in 0..max_training_points {
+                rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
+                let j = i + ((rng_state % ((num_tokens - i) as u64)) as usize);
+                indices.swap(i, j);
+            }
+
+            // Copy subsampled tokens to new buffer
+            let mut subsampled = Vec::with_capacity(max_training_points * self.embedding_dim);
+            for i in 0..max_training_points {
+                let token_idx = indices[i];
+                let start = token_idx * self.embedding_dim;
+                subsampled.extend_from_slice(&embeddings[start..start + self.embedding_dim]);
+            }
+
+            (subsampled, max_training_points)
+        } else {
+            console_log!("   📊 Training k-means on all {} tokens (under {} limit)",
+                         num_tokens, max_training_points);
+            (embeddings.to_vec(), num_tokens)
+        };
+
+        // Simple k-means initialization: pick evenly-spaced samples as initial centroids
+        // Ensure we space centroids across the full training data
         for c in 0..self.num_centroids {
-            let token_idx = (c * step).min(num_tokens - 1);
+            // Distribute centroids evenly: map centroid index to training data index
+            let token_idx = ((c as f64) * (training_count as f64) / (self.num_centroids as f64)) as usize;
+            let token_idx = token_idx.min(training_count - 1); // Safety clamp
             let src_start = token_idx * self.embedding_dim;
             let dst_start = c * self.embedding_dim;
             self.centroids[dst_start..dst_start + self.embedding_dim]
-                .copy_from_slice(&embeddings[src_start..src_start + self.embedding_dim]);
+                .copy_from_slice(&training_embeddings[src_start..src_start + self.embedding_dim]);
         }
 
-        // K-means iterations
+        // K-means iterations on training data (subsampled or full)
         for _iter in 0..num_iters {
             let mut new_centroids = vec![0.0; self.num_centroids * self.embedding_dim];
             let mut counts = vec![0; self.num_centroids];
 
-            // Assignment step
-            for token_idx in 0..num_tokens {
+            // Assignment step - use training_count not num_tokens
+            for token_idx in 0..training_count {
                 let token_start = token_idx * self.embedding_dim;
-                let token_emb = &embeddings[token_start..token_start + self.embedding_dim];
+                let token_emb = &training_embeddings[token_start..token_start + self.embedding_dim];
 
                 // Find nearest centroid
                 let centroid_idx = self.find_nearest_centroid(token_emb);
@@ -424,7 +461,7 @@ impl FastPlaidQuantized {
             ivf_clusters: Vec::new(),
             ivf_centroids: Vec::new(),
             num_clusters: 0,
-            nprobe: 4, // PLAID default: 4 clusters per query token
+            nprobe: 2, // Number of clusters to probe per query token (2 for speed, 8 for recall)
             ivf_deltas: Vec::new(),
             delta_threshold: 10, // Compact when deltas exceed 10% of base
             base_doc_count: 0,
@@ -466,9 +503,10 @@ impl FastPlaidQuantized {
         }
 
         // Initialize and train codec
-        let num_centroids = num_centroids.unwrap_or(256.min(total_tokens / 10));
+        // Testing 512 centroids (270k tokens / 512 = 528 samples/centroid)
+        let num_centroids = num_centroids.unwrap_or(512.min(total_tokens / 10));
         let mut codec = ResidualCodec4bit::new(self.embedding_dim, num_centroids);
-        codec.train(embeddings_data, total_tokens, 4);
+        codec.train(embeddings_data, total_tokens, 5);
 
         // Encode all documents
         let mut documents = Vec::with_capacity(num_docs);
@@ -1170,170 +1208,86 @@ impl FastPlaidQuantized {
 
     /// Build IVF (Inverted File Index) for fast approximate search
     /// Uses first token of each document as representative
+    /// REUSES codec centroids instead of training new ones (Fast-Plaid approach)
     fn build_ivf_index(
         &mut self,
         embeddings_data: &[f32],
         doc_info: &[i64],
         num_docs: usize,
     ) -> Result<(), JsValue> {
-        // V2: Extract ALL TOKENS first to calculate cluster count
-        let total_tokens: usize = (0..num_docs)
-            .map(|i| doc_info[i * 2 + 1] as usize)
-            .sum();
+        console_log!("🎯 Building IVF index for fast search...");
 
-        // V2: Determine number of clusters based on TOTAL TOKENS (not documents)
-        // Target ~100-150 tokens per cluster for good selectivity (PLAID-inspired)
-        // For 270k tokens: 270k/150 = 1800, round to power of 2 = 2048
-        let tokens_per_cluster_target = 150;
-        self.num_clusters = (total_tokens / tokens_per_cluster_target).max(1);
+        // REUSE codec centroids instead of training new ones!
+        let codec = self.codec.as_ref()
+            .ok_or_else(|| JsValue::from_str("Codec not initialized"))?;
 
-        // Round up to next power of 2 for efficiency (better memory alignment)
-        self.num_clusters = self.num_clusters.next_power_of_two();
+        self.num_clusters = codec.num_centroids;
+        self.ivf_centroids = codec.centroids.clone();
 
-        // Reasonable bounds: at least 256, at most 4096
-        self.num_clusters = self.num_clusters.max(256).min(4096);
+        console_log!("   🔄 Reusing {} codec centroids for IVF (Fast-Plaid approach)", self.num_clusters);
 
-        console_log!("   V2: Creating {} IVF clusters for {} tokens from {} documents (~{} tokens/cluster target)...",
-                     self.num_clusters, total_tokens, num_docs, total_tokens / self.num_clusters);
+        // Use HashSet per cluster to auto-deduplicate documents (Fast-Plaid approach)
+        let mut cluster_doc_sets: Vec<std::collections::HashSet<usize>> =
+            vec![std::collections::HashSet::new(); self.num_clusters];
 
-        let mut all_tokens = Vec::with_capacity(total_tokens);
-        let mut token_to_doc: Vec<usize> = Vec::with_capacity(total_tokens);
+        // Index ALL tokens (not just first token) - matches Fast-Plaid & ColBERTv2
         let mut offset = 0;
+        let mut total_token_assignments = 0;
 
         for doc_idx in 0..num_docs {
             let num_tokens = doc_info[doc_idx * 2 + 1] as usize;
-            let doc_emb = &embeddings_data[offset..offset + num_tokens * self.embedding_dim];
 
-            // Collect ALL tokens from this document
+            // Assign EACH token to its nearest cluster
             for token_idx in 0..num_tokens {
-                let token_start = token_idx * self.embedding_dim;
-                let token = &doc_emb[token_start..token_start + self.embedding_dim];
-                all_tokens.extend_from_slice(token);
-                token_to_doc.push(doc_idx);
+                let token_start = offset + (token_idx * self.embedding_dim);
+                let token = &embeddings_data[token_start..token_start + self.embedding_dim];
+
+                let cluster_id = self.find_nearest_ivf_cluster(token);
+
+                // Add document to cluster (HashSet auto-deduplicates)
+                cluster_doc_sets[cluster_id].insert(doc_idx);
+                total_token_assignments += 1;
             }
 
             offset += num_tokens * self.embedding_dim;
         }
 
-        // K-means clustering on ALL tokens (but same number of clusters as before)
-        self.ivf_centroids = vec![0.0; self.num_clusters * self.embedding_dim];
+        // Convert HashSets to Vecs (deduplicated document IDs per cluster)
         self.ivf_clusters = vec![Vec::new(); self.num_clusters];
-
-        // Initialize centroids: pick RANDOM tokens using Fisher-Yates shuffle (O(n) instead of O(n²))
-        console_log!("   Initializing {} centroids with Fisher-Yates shuffle...", self.num_clusters);
-        let mut rng_state = 123456789u64; // Seed for LCG
-
-        // Create index array and shuffle first num_clusters positions
-        let mut indices: Vec<usize> = (0..total_tokens).collect();
-        for i in 0..self.num_clusters {
-            // Fisher-Yates: swap position i with random position j >= i
-            rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
-            let j = i + ((rng_state % ((total_tokens - i) as u64)) as usize);
-            indices.swap(i, j);
+        for (cluster_id, doc_set) in cluster_doc_sets.iter().enumerate() {
+            self.ivf_clusters[cluster_id] = doc_set.iter().copied().collect();
+            self.ivf_clusters[cluster_id].sort(); // Keep sorted for consistency
         }
 
-        // Copy first num_clusters shuffled tokens as initial centroids
-        for c in 0..self.num_clusters {
-            let token_idx = indices[c];
-            let token_start = token_idx * self.embedding_dim;
-            let centroid_start = c * self.embedding_dim;
-            self.ivf_centroids[centroid_start..centroid_start + self.embedding_dim]
-                .copy_from_slice(&all_tokens[token_start..token_start + self.embedding_dim]);
-        }
-        console_log!("   ✅ Initialized {} centroids", self.num_clusters);
-
-        // Run k-means iterations on ALL tokens (increased from 10 to 20 for better convergence)
-        for iteration in 0..20 {
-            console_log!("   K-means iteration {}/20...", iteration + 1);
-
-            // Clear clusters
-            for cluster in &mut self.ivf_clusters {
-                cluster.clear();
-            }
-
-            // Assign each TOKEN to nearest cluster
-            // Then map token → doc and add doc to cluster
-            let mut cluster_doc_sets: Vec<std::collections::HashSet<usize>> =
-                vec![std::collections::HashSet::new(); self.num_clusters];
-
-            for token_idx in 0..total_tokens {
-                let token_start = token_idx * self.embedding_dim;
-                let token = &all_tokens[token_start..token_start + self.embedding_dim];
-                let nearest_cluster = self.find_nearest_ivf_cluster(token);
-                let doc_idx = token_to_doc[token_idx];
-
-                // Add document to this cluster (HashSet ensures no duplicates)
-                cluster_doc_sets[nearest_cluster].insert(doc_idx);
-            }
-
-            // Convert HashSets to Vecs
-            for (cluster_id, doc_set) in cluster_doc_sets.iter().enumerate() {
-                self.ivf_clusters[cluster_id] = doc_set.iter().copied().collect();
-            }
-
-            // Update centroids by averaging assigned TOKENS
-            let mut new_centroids = vec![0.0; self.num_clusters * self.embedding_dim];
-            let mut centroid_counts = vec![0usize; self.num_clusters];
-
-            for token_idx in 0..total_tokens {
-                let token_start = token_idx * self.embedding_dim;
-                let token = &all_tokens[token_start..token_start + self.embedding_dim];
-                let nearest_cluster = self.find_nearest_ivf_cluster(token);
-
-                let centroid_start = nearest_cluster * self.embedding_dim;
-                for d in 0..self.embedding_dim {
-                    new_centroids[centroid_start + d] += token[d];
-                }
-                centroid_counts[nearest_cluster] += 1;
-            }
-
-            // Average and handle empty clusters
-            let mut empty_clusters = Vec::new();
-            for c in 0..self.num_clusters {
-                if centroid_counts[c] > 0 {
-                    let centroid_start = c * self.embedding_dim;
-                    let count = centroid_counts[c] as f32;
-                    for d in 0..self.embedding_dim {
-                        new_centroids[centroid_start + d] /= count;
-                    }
-                } else {
-                    // Track empty clusters for reinitialization
-                    empty_clusters.push(c);
-                }
-            }
-
-            // Reinitialize empty clusters with random tokens (prevents wasted clusters)
-            if !empty_clusters.is_empty() {
-                for &empty_c in &empty_clusters {
-                    // Pick a random token to reinitialize this centroid
-                    rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let token_idx = (rng_state % (total_tokens as u64)) as usize;
-                    let token_start = token_idx * self.embedding_dim;
-                    let centroid_start = empty_c * self.embedding_dim;
-                    new_centroids[centroid_start..centroid_start + self.embedding_dim]
-                        .copy_from_slice(&all_tokens[token_start..token_start + self.embedding_dim]);
-                }
-            }
-
-            self.ivf_centroids = new_centroids;
-        }
-
-        // Log cluster statistics with distribution
-        let avg_docs_per_cluster = num_docs as f32 / self.num_clusters as f32;
+        // Log cluster statistics
         let mut cluster_sizes: Vec<usize> = self.ivf_clusters.iter().map(|c| c.len()).collect();
         cluster_sizes.sort();
         let min_size = cluster_sizes.first().copied().unwrap_or(0);
-        let max_size = cluster_sizes.last().copied().unwrap_or(0);
         let median_size = cluster_sizes.get(cluster_sizes.len() / 2).copied().unwrap_or(0);
+        let max_size = cluster_sizes.last().copied().unwrap_or(0);
+        let empty_clusters = self.ivf_clusters.iter().filter(|c| c.is_empty()).count();
 
+        let avg_docs_per_cluster = num_docs as f32 / self.num_clusters as f32;
         console_log!("   ✅ IVF index built:");
-        console_log!("      {} clusters, avg {:.1} docs/cluster", self.num_clusters, avg_docs_per_cluster);
+        console_log!("      {} clusters, {} total token assignments",
+                     self.num_clusters, total_token_assignments);
+        console_log!("      Avg {:.1} docs/cluster (after deduplication)", avg_docs_per_cluster);
         console_log!("      Distribution: min={}, median={}, max={}", min_size, median_size, max_size);
 
-        // Count empty clusters
-        let empty_clusters = self.ivf_clusters.iter().filter(|c| c.is_empty()).count();
         if empty_clusters > 0 {
-            console_log!("      ⚠️  {} empty clusters!", empty_clusters);
+            console_log!("      ⚠️  {} empty clusters", empty_clusters);
+        }
+
+        // DIAGNOSTIC: Show top 10 largest clusters
+        let mut sizes_with_ids: Vec<(usize, usize)> = self.ivf_clusters.iter()
+            .enumerate()
+            .map(|(id, set)| (id, set.len()))
+            .collect();
+        sizes_with_ids.sort_by_key(|&(_, size)| std::cmp::Reverse(size));
+
+        console_log!("   📊 Top 10 largest clusters:");
+        for (cluster_id, size) in sizes_with_ids.iter().take(10) {
+            console_log!("      Cluster {} has {} documents", cluster_id, size);
         }
 
         Ok(())
